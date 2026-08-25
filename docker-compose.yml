@@ -1,0 +1,34 @@
+services:
+  video-composer:
+    build: .
+    image: neovids-video-composer:stage16
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8013
+      DATA_ROOT: /data
+      ORCHESTRATOR_BASE_URL: ${ORCHESTRATOR_BASE_URL:-http://host.docker.internal:8011}
+      MEDIA_INDEXER_BASE_URL: ${MEDIA_INDEXER_BASE_URL:-http://host.docker.internal:8012}
+      INTERNAL_ASSET_BASE_URL: http://127.0.0.1:8013
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-10}
+      RENDER_WORKER_CONCURRENCY: ${RENDER_WORKER_CONCURRENCY:-1}
+      REMOTION_CONCURRENCY: ${REMOTION_CONCURRENCY:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - '${VIDEO_COMPOSER_PORT:-8013}:8013'
+    volumes:
+      - video-composer-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:8013/health/ready']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  video-composer-data:

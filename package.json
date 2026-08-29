@@ -19,6 +19,7 @@
     "test:integration": "vitest run tests/integration",
     "smoke:render": "tsx scripts/smoke-render.ts",
     "benchmark": "tsx scripts/benchmark-render.ts",
+    "benchmark:resources": "tsx scripts/benchmark-resources.ts",
     "extract:frames": "tsx scripts/extract-frames.ts",
     "cache:cleanup": "tsx scripts/cleanup-cache.ts",
     "outputs:cleanup": "tsx scripts/cleanup-outputs.ts"

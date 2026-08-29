@@ -151,11 +151,28 @@ healthcheck and host-gateway access to Orchestrator/Media Indexer.
 
 ```bash
 npm run benchmark -- --workflow-id UUID --mode final
+npm run benchmark -- --workflow-id UUID --mode final --run
 npm run extract:frames -- --input data/outputs/RENDER_ID.mp4
 ```
 
-Benchmark output is JSONL-compatible and includes persisted preparation/render/validation timings,
+The first command is a strict plan; no render request occurs without `--run`. Benchmark output is
+JSONL-compatible and includes persisted preparation/render/validation timings,
 cache hits, size and render factor. Frame extraction is a debug aid, not Stage 18 visual QA.
+
+An isolated manifest-based resource matrix is also available:
+
+```bash
+npm run benchmark:resources -- --manifest /path/to/render-manifest.json \
+  --concurrency 1 2 current --output /path/to/benchmark
+npm run benchmark:resources -- --manifest /path/to/render-manifest.json \
+  --concurrency 1 2 current --output /path/to/benchmark --run
+```
+
+Plan mode validates the manifest and starts no bundle, Chromium or render. Real mode writes one MP4
+per case and an atomic `report.json` with wall time, render factor, peak RSS for Node plus its Linux
+descendants, and system GPU-memory baseline/peak when `nvidia-smi` is available. GPU memory is
+explicitly system-scoped, so the operator must exclude unrelated GPU work. This tool never changes
+the production `REMOTION_CONCURRENCY` setting.
 
 See [contract details](docs/CONTRACT.md) and [operations](docs/OPERATIONS.md).
 

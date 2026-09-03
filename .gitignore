@@ -4,3 +4,4 @@ coverage/
 data/
 .env
 *.log
+repomix-output.xml

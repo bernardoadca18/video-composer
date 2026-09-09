@@ -76,3 +76,8 @@ export const validateNarration = async (
     throw new ComposerError('narration_validation_failure', 'Narration must be 48 kHz');
   }
 };
+
+export const hasAudioStream = async (ffprobe: string, filePath: string): Promise<boolean> => {
+  const probe = await probeMedia(ffprobe, filePath);
+  return probe.streams.some((item) => item.codec_type === 'audio');
+};

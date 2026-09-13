@@ -62,6 +62,7 @@ describe('render API', () => {
     });
     expect(created.statusCode).toBe(202);
     expect(created.json().status).toBe('queued');
+    expect(created.json().presentation_fingerprint).toBeNull();
     expect(created.json().output_path).toBeUndefined();
     expect(suppliedKey).toBe('api-key');
     expect((await server.inject({ method: 'GET', url: `/v1/renders/${job.id}` })).statusCode).toBe(

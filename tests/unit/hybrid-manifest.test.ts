@@ -15,6 +15,7 @@ import {
   mediaMetadata,
   testConfig,
 } from '../helpers.js';
+import { presentation as presentationSpec } from './presentation-contract.test.js';
 
 const IMAGE_ID = '50000000-0000-4000-8000-000000000002';
 const IMAGE_INDEX_ID = '50000000-0000-4000-8000-000000000003';
@@ -135,6 +136,27 @@ describe('hybrid render manifest', () => {
     expect(image.source.source_type).toBe('static_image');
     expect(image.source).not.toHaveProperty('source_start_microseconds');
     expect(image.frame_duration).toBe(90);
+  });
+
+  it('keeps hybrid source presentation composable with overlay presentation V3', () => {
+    const timeline = hybridTimeline();
+    const result = buildRenderManifest(
+      timeline,
+      new Map([
+        [MEDIA_ID, mediaMetadata({ media_kind: 'video', sha256: MEDIA_SHA })],
+        [IMAGE_ID, imageMetadata()],
+      ]),
+      youtube1080p30V1,
+      'final',
+      testConfig('/tmp/video-composer-hybrid-presentation'),
+      presentationSpec(),
+    );
+    expect(result.manifest.schema_version).toBe('render_manifest_v3');
+    expect(result.manifest.source_timeline_schema_version).toBe('production_timeline_schema_v2');
+    expect(result.manifest.placements[1]).toMatchObject({
+      presentation: { policy_version: 'static_image_presentation_v1' },
+    });
+    expect(result.manifest.presentation.captions.cues).toHaveLength(1);
   });
 
   it.each([

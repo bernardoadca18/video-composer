@@ -11,6 +11,7 @@ import {
 } from 'remotion';
 
 import { type RenderManifest, RenderManifestSchema } from '../domain/contracts.js';
+import { PresentationLayers } from './presentation/PresentationLayers.js';
 
 const GameplayPlacement: React.FC<{
   source: string;
@@ -133,6 +134,9 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
             </Sequence>
           ))
         : null}
+      {manifest.schema_version === 'render_manifest_v3' ? (
+        <PresentationLayers presentation={manifest.presentation} />
+      ) : null}
       <Audio src={manifest.narration.asset_url} />
     </AbsoluteFill>
   );

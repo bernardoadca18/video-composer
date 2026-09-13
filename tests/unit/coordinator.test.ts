@@ -33,7 +33,13 @@ describe('render coordinator', () => {
     const fetchFn = async (input: string | URL | Request): Promise<Response> => {
       const url = String(input);
       calls.push(url);
-      if (url.includes('/production-timeline')) return Response.json(timeline);
+      if (url.includes('/composer-render-input')) {
+        return Response.json({
+          schema_version: 'composer_render_input_v1',
+          production_timeline: timeline,
+          presentation: null,
+        });
+      }
       if (url.endsWith(`/media-assets/${MEDIA_ID}`)) return Response.json(metadata);
       return new Response(null, { status: 404 });
     };
@@ -68,7 +74,9 @@ describe('render coordinator', () => {
     expect(enqueued).toEqual([first.job.id]);
     expect(JSON.stringify(timeline)).toBe(before);
     expect(
-      calls.every((url) => url.includes('/production-timeline') || url.includes('/media-assets/')),
+      calls.every(
+        (url) => url.includes('/composer-render-input') || url.includes('/media-assets/'),
+      ),
     ).toBe(true);
     expect(calls.some((url) => url.includes('search'))).toBe(false);
 
@@ -107,8 +115,12 @@ describe('render coordinator', () => {
     const repository = new RenderJobRepository(config.databasePath);
     repositories.push(repository);
     const fetchFn = async (input: string | URL | Request): Promise<Response> =>
-      String(input).includes('/production-timeline')
-        ? Response.json(productionTimeline())
+      String(input).includes('/composer-render-input')
+        ? Response.json({
+            schema_version: 'composer_render_input_v1',
+            production_timeline: productionTimeline(),
+            presentation: null,
+          })
         : Response.json(mediaMetadata());
     const coordinator = new RenderCoordinator(
       config,

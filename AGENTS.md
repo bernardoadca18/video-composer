@@ -12,6 +12,21 @@ and outputs under the configured data root. Publish outputs atomically and fail 
 
 Stage 17 end-to-end orchestration is not part of this repository yet.
 
+# Deterministic presentation rules
+
+- Read the versioned Composer render-input package; do not fetch transcription/script fragments.
+- presentation_spec_v1 is already resolved upstream. Never segment captions, derive section
+  titles, choose branding, or infer transitions here.
+- Presentation-bearing renders use render_manifest_v3 and video_composer_v3_presentation; absence
+  must preserve the exact V1/V2 path.
+- Validate the canonical PresentationSpec fingerprint and quantize overlay boundaries once before
+  Remotion. Closed presets only; no arbitrary URL, path, base64, HTML, or CSS input.
+- Source-image presentation and video overlay presentation are independent layers.
+- CUT remains the source-edit default. V1 overlay transitions support only bounded fade_to_black,
+  preserving total duration.
+- During active Media Indexer corpus ingestion, run unit/contract/type/build checks only. Defer
+  SMOKE_HYBRID=1 SMOKE_PRESENTATION=1 npm run smoke:render.
+
 # Durable hybrid-source rules
 
 - Timeline V2 visual sources are a strict `video_segment | static_image` union; images are

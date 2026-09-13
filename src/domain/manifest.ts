@@ -3,12 +3,16 @@ import { fingerprint } from '../core/identity.js';
 import type { RenderProfile } from './profiles.js';
 import {
   type MediaAssetMetadata,
+  type PresentationSpec,
   type ProductionTimeline,
   type RenderManifest,
   type RenderManifestV1,
   type RenderManifestV2,
+  type RenderManifestV3,
+  PresentationSpecSchema,
   RenderManifestV1Schema,
   RenderManifestV2Schema,
+  RenderManifestV3Schema,
 } from './contracts.js';
 import { quantizeBoundaries, secondsToMicroseconds } from './quantization.js';
 
@@ -525,6 +529,14 @@ const buildRenderManifestV2 = (
 };
 
 export function buildRenderManifest(
+  timeline: ProductionTimeline,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+  presentation: PresentationSpec,
+): { manifest: RenderManifestV3; manifestFingerprint: string; renderFingerprint: string };
+export function buildRenderManifest(
   timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v1' }>,
   metadata: ReadonlyMap<string, MediaAssetMetadata>,
   profile: RenderProfile,
@@ -544,6 +556,7 @@ export function buildRenderManifest(
   profile: RenderProfile,
   mode: 'preview' | 'final',
   config: AppConfig,
+  presentation?: PresentationSpec | null,
 ): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string };
 export function buildRenderManifest(
   timeline: ProductionTimeline,
@@ -551,8 +564,123 @@ export function buildRenderManifest(
   profile: RenderProfile,
   mode: 'preview' | 'final',
   config: AppConfig,
+  presentation?: PresentationSpec | null,
 ): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string } {
-  return timeline.schema_version === 'production_timeline_schema_v2'
-    ? buildRenderManifestV2(timeline, metadata, profile, mode, config)
-    : buildRenderManifestV1(timeline, metadata, profile, mode, config);
+  const legacy =
+    timeline.schema_version === 'production_timeline_schema_v2'
+      ? buildRenderManifestV2(timeline, metadata, profile, mode, config)
+      : buildRenderManifestV1(timeline, metadata, profile, mode, config);
+  if (!presentation) return legacy;
+
+  const parsedPresentation = PresentationSpecSchema.parse(presentation);
+  const { fingerprint: declaredFingerprint, ...presentationContent } = parsedPresentation;
+  if (fingerprint(presentationContent) !== declaredFingerprint) {
+    throw new ManifestValidationError(
+      'presentation_identity',
+      'PresentationSpec fingerprint does not match its canonical content',
+    );
+  }
+  const presentationBoundaries = [
+    ...parsedPresentation.captions.cues.flatMap((item) => [item.start_seconds, item.end_seconds]),
+    ...parsedPresentation.section_titles.flatMap((item) => [item.start_seconds, item.end_seconds]),
+    ...parsedPresentation.transitions.flatMap((item) => [
+      item.boundary_seconds - item.duration_seconds / 2,
+      item.boundary_seconds,
+      item.boundary_seconds + item.duration_seconds / 2,
+    ]),
+  ];
+  let presentationFrames;
+  try {
+    const quantized = quantizeBoundaries(
+      timeline.duration_seconds,
+      presentationBoundaries,
+      profile.fps,
+    );
+    presentationFrames = {
+      schema_version: parsedPresentation.schema_version,
+      strategy_version: parsedPresentation.strategy_version,
+      profile_id: parsedPresentation.profile_id,
+      fingerprint: parsedPresentation.fingerprint,
+      captions: {
+        policy_version: parsedPresentation.captions.policy_version,
+        preset: parsedPresentation.captions.preset,
+        cues: parsedPresentation.captions.cues.map((item) => {
+          const start = quantized.frameAt(item.start_seconds);
+          const end = quantized.frameAt(item.end_seconds);
+          if (end <= start) {
+            throw new ManifestValidationError(
+              'frame_quantization',
+              'Caption cue collapsed to zero frames',
+            );
+          }
+          return {
+            text: item.text,
+            frame_start: start,
+            frame_duration: end - start,
+            preset: item.preset,
+          };
+        }),
+      },
+      section_titles: parsedPresentation.section_titles.map((item) => {
+        const start = quantized.frameAt(item.start_seconds);
+        const end = quantized.frameAt(item.end_seconds);
+        if (end <= start) {
+          throw new ManifestValidationError(
+            'frame_quantization',
+            'Section title collapsed to zero frames',
+          );
+        }
+        return {
+          text: item.text,
+          frame_start: start,
+          frame_duration: end - start,
+          preset: item.preset,
+        };
+      }),
+      branding: parsedPresentation.branding,
+      transitions: parsedPresentation.transitions.map((item) => {
+        const startSeconds = item.boundary_seconds - item.duration_seconds / 2;
+        const endSeconds = item.boundary_seconds + item.duration_seconds / 2;
+        const start = quantized.frameAt(startSeconds);
+        const boundary = quantized.frameAt(item.boundary_seconds);
+        const end = quantized.frameAt(endSeconds);
+        if (end <= start || boundary < start || boundary > end) {
+          throw new ManifestValidationError(
+            'frame_quantization',
+            'Transition collapsed to an invalid frame range',
+          );
+        }
+        return {
+          type: item.type,
+          frame_start: start,
+          boundary_frame: boundary,
+          duration_frames: end - start,
+          preset: item.preset,
+        };
+      }),
+    };
+  } catch (error) {
+    if (error instanceof ManifestValidationError) throw error;
+    throw new ManifestValidationError('invalid_presentation', 'Presentation range is invalid');
+  }
+
+  const manifest = RenderManifestV3Schema.parse({
+    ...legacy.manifest,
+    schema_version: 'render_manifest_v3',
+    composer_strategy_version: 'video_composer_v3_presentation',
+    source_timeline_schema_version: timeline.schema_version,
+    presentation: presentationFrames,
+  });
+  const manifestFingerprint = fingerprint(manifest);
+  return {
+    manifest,
+    manifestFingerprint,
+    renderFingerprint: fingerprint({
+      manifest_fingerprint: manifestFingerprint,
+      composer_strategy_version: 'video_composer_v3_presentation',
+      remotion_version: '4.0.516',
+      render_profile_identity: profile.identity,
+      mode,
+    }),
+  };
 }

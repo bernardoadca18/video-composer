@@ -2,9 +2,14 @@
 
 ## Accepted upstream artifact
 
-The service reads `GET /workflow/{workflow_id}/production-timeline` and supports only:
+The service reads the coherent internal package
+GET /workflow/{workflow_id}/composer-render-input. The package contains a frozen
+ProductionTimeline plus an optional PresentationSpec. The legacy timeline endpoint remains an
+Orchestrator API, but the Composer does not assemble presentation by making independent reads.
 
-- schema `production_timeline_schema_v1`;
+The Composer supports:
+
+- schemas production_timeline_schema_v1 and production_timeline_schema_v2;
 - status `completed` or `completed_with_gaps`;
 - source type `gameplay`;
 - playback rate `1.0`;
@@ -26,6 +31,13 @@ so narration is not truncated. Any placement or gap collapsing to zero frames is
 `render_manifest_v1` is a normalized immutable snapshot containing timeline identity, profile,
 source SHA-256 identities, exact source microseconds, frame ranges, proxy keys and controlled local
 asset URLs. Its canonical SHA-256 differs from the upstream ProductionTimeline fingerprint.
+
+render_manifest_v2 preserves the hybrid video_segment | static_image source contract.
+render_manifest_v3 is emitted only when a valid presentation_spec_v1 is present. It retains the
+V1/V2 source semantics, records the source timeline schema, validates the PresentationSpec
+fingerprint, and quantizes every overlay boundary to frames before rendering. Caption, title,
+branding, or transition changes therefore change manifest and render identity. A missing
+PresentationSpec follows the original V1/V2 code path and identity unchanged.
 
 ## Output guarantee
 
@@ -55,3 +67,23 @@ and 15 s maximum consecutive still duration) and freezes its result in Timeline 
 does not duplicate or reinterpret those tunable limits: it validates positive, non-overlapping,
 frameable placements plus the strict source/presentation/integrity contract, then renders exactly
 the approved hold.
+
+# PresentationSpec V1
+
+Presentation is a strict overlay contract owned and resolved by the Orchestrator:
+
+- captions use only timestamped words from the transcription tied to the final narration SHA;
+- section titles use only explicit display_title values preserved from editorial planning;
+- branding is a closed preset union (branding_disabled_v1 or the bounded synthetic
+  text_watermark_v1 contract);
+- cuts remain timeline default; fade_to_black is the only V1 overlay transition and never changes
+  source ranges or total duration.
+
+The long-form profile uses caption_policy_v1, subtle_longform_v1, minimal_section_v1,
+branding_disabled_v1, and section_boundary_fade_v1. Upstream can provide no paths, URLs, base64,
+HTML, CSS, or asset payloads. Unknown keys/presets, non-finite or overlapping ranges, captions
+beyond two 42-character lines, stale audio identity, and overlays outside duration fail closed.
+
+Remotion layer order is primary visual (including existing static-image presentation), preview-gap
+diagnostics, transition overlay, section title, captions, branding, and the single narration audio
+track. The Composer performs no ASR, LLM call, segmentation, title invention, or visual selection.

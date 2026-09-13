@@ -1,7 +1,12 @@
 import type { ZodType } from 'zod';
 
 import { ComposerError } from '../core/errors.js';
-import { type ProductionTimeline, ProductionTimelineSchema } from '../domain/contracts.js';
+import {
+  type ComposerRenderInput,
+  ComposerRenderInputSchema,
+  type ProductionTimeline,
+  ProductionTimelineSchema,
+} from '../domain/contracts.js';
 
 type Fetch = typeof fetch;
 
@@ -39,6 +44,11 @@ export class OrchestratorClient {
   async getTimeline(workflowId: string): Promise<ProductionTimeline> {
     const response = await this.request(`/workflow/${workflowId}/production-timeline`);
     return await this.parse(response, ProductionTimelineSchema);
+  }
+
+  async getRenderInput(workflowId: string): Promise<ComposerRenderInput> {
+    const response = await this.request(`/workflow/${workflowId}/composer-render-input`);
+    return await this.parse(response, ComposerRenderInputSchema);
   }
 
   async openNarration(workflowId: string): Promise<Response> {

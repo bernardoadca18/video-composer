@@ -55,7 +55,9 @@ export class RenderCoordinator {
       }
       throw error;
     }
-    const timeline = await this.orchestrator.getTimeline(request.workflow_id);
+    const renderInput = await this.orchestrator.getRenderInput(request.workflow_id);
+    const timeline = renderInput.production_timeline;
+    const presentation = renderInput.presentation;
     const mediaIds = [
       ...new Set(timeline.tracks.primary_visual.placements.map((item) => item.source.media_id)),
     ];
@@ -70,21 +72,33 @@ export class RenderCoordinator {
     );
     let built;
     try {
-      built = buildRenderManifest(timeline, metadata, profile, request.mode, this.config);
+      built = buildRenderManifest(
+        timeline,
+        metadata,
+        profile,
+        request.mode,
+        this.config,
+        presentation,
+      );
     } catch (error) {
       if (error instanceof ManifestValidationError) {
         throw new ComposerError(error.category, error.message, 422);
       }
       throw error;
     }
-    const requestFingerprint = fingerprint({
+    const requestIdentity: Record<string, unknown> = {
       workflow_id: request.workflow_id,
       render_profile: profile.name,
       render_profile_identity: profile.identity,
       mode: request.mode,
       production_timeline_id: timeline.id,
       production_timeline_fingerprint: timeline.fingerprint,
-    });
+    };
+    if (presentation) {
+      requestIdentity.presentation_fingerprint = presentation.fingerprint;
+      requestIdentity.contract = 'composer_render_request_v2_presentation';
+    }
+    const requestFingerprint = fingerprint(requestIdentity);
     if (idempotencyKey) {
       const existing = this.repository.byIdempotencyKey(idempotencyKey);
       if (existing) {
@@ -158,7 +172,7 @@ export class RenderCoordinator {
           { ...output },
           {
             recoveredAfterRestart: true,
-            composerStrategyVersion: 'video_composer_v1',
+            composerStrategyVersion: job.manifest.composer_strategy_version,
             remotionVersion: '4.0.516',
           },
         );

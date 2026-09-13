@@ -20,6 +20,7 @@ const IMAGE_INDEX_ID = '77777777-7777-4777-8777-777777777777';
 const IMAGE_2_ID = '55555555-5555-4555-8555-555555555557';
 const IMAGE_2_INDEX_ID = '77777777-7777-4777-8777-777777777778';
 const hybrid = process.env.SMOKE_HYBRID === '1';
+const presentationEnabled = process.env.SMOKE_PRESENTATION === '1';
 const servicePort = Number(process.env.SMOKE_COMPOSER_PORT ?? 18013);
 const upstreamPort = servicePort + 1;
 const externalComposerUrl = process.env.SMOKE_EXTERNAL_COMPOSER_URL;
@@ -358,8 +359,56 @@ const main = async (): Promise<void> => {
     gaps: [],
     visual_coverage_ratio: 1,
   };
+  const presentationContent = {
+    schema_version: 'presentation_spec_v1',
+    strategy_version: 'longform_presentation_v1',
+    profile_id: 'longform_professional_v1',
+    captions: {
+      policy_version: 'caption_policy_v1',
+      preset: 'subtle_longform_v1',
+      cues: [
+        {
+          text: 'Synthetic narration caption',
+          start_seconds: 0.2,
+          end_seconds: Math.min(duration, 2.2),
+          preset: 'subtle_longform_v1',
+        },
+      ],
+    },
+    section_titles: [
+      {
+        text: 'Synthetic section',
+        start_seconds: duration / 2,
+        end_seconds: Math.min(duration, duration / 2 + 2.4),
+        preset: 'minimal_section_v1',
+      },
+    ],
+    branding: {
+      preset: 'text_watermark_v1',
+      enabled: true,
+      text: 'NEOVIDS SMOKE',
+      placement: 'top_right',
+      opacity: 0.5,
+    },
+    transitions: [
+      {
+        type: 'fade_to_black',
+        boundary_seconds: duration / 2,
+        duration_seconds: 0.3,
+        preset: 'section_boundary_fade_v1',
+      },
+    ],
+  };
+  const presentation = presentationEnabled
+    ? { ...presentationContent, fingerprint: fingerprint(presentationContent) }
+    : null;
   const upstream = Fastify({ logger: false });
   upstream.get(`/workflow/${WORKFLOW_ID}/production-timeline`, async () => timeline);
+  upstream.get(`/workflow/${WORKFLOW_ID}/composer-render-input`, async () => ({
+    schema_version: 'composer_render_input_v1',
+    production_timeline: timeline,
+    presentation,
+  }));
   upstream.get(
     `/workflow/${WORKFLOW_ID}/audio`,
     async (_request, reply) => await reply.type('audio/wav').send(createReadStream(narrationPath)),
@@ -456,7 +505,11 @@ const main = async (): Promise<void> => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': hybrid ? 'hybrid-engine-smoke' : 'stage16-engine-smoke',
+        'Idempotency-Key': presentationEnabled
+          ? 'presentation-engine-smoke'
+          : hybrid
+            ? 'hybrid-engine-smoke'
+            : 'stage16-engine-smoke',
       },
       body: JSON.stringify({
         workflow_id: WORKFLOW_ID,
@@ -474,9 +527,11 @@ const main = async (): Promise<void> => {
       persistentRoot,
       realNarrationUrl
         ? 'real-narration-render.mp4'
-        : hybrid
-          ? 'hybrid-engine-render.mp4'
-          : 'engine-render.mp4',
+        : presentationEnabled
+          ? 'presentation-engine-render.mp4'
+          : hybrid
+            ? 'hybrid-engine-render.mp4'
+            : 'engine-render.mp4',
     );
     await writeFile(outputPath, Buffer.from(await outputResponse.arrayBuffer()));
     const outputProbe = await probeMedia('ffprobe', outputPath);

@@ -39,6 +39,10 @@ const jobResponse = (job: RenderJob): Record<string, unknown> => ({
   total_frames: job.totalFrames,
   render_fingerprint: job.renderFingerprint,
   manifest_fingerprint: job.manifestFingerprint,
+  presentation_fingerprint:
+    job.manifest.schema_version === 'render_manifest_v3'
+      ? job.manifest.presentation.fingerprint
+      : null,
   created_at: job.createdAt,
   started_at: job.startedAt,
   completed_at: job.completedAt,

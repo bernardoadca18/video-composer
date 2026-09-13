@@ -69,3 +69,17 @@ logical ID, project, `media_kind=image`, MIME, byte size, and SHA-256.
 contract fixture, mirrored byte-for-byte in the Orchestrator tests. It must continue to parse as
 `video_segment -> static_image`; enum, MIME, or source-union drift is expected to fail CI before
 reaching a render worker.
+
+## Presentation smoke (run after corpus ingestion)
+
+The prepared synthetic smoke combines video → image → video → image with narration, captions, one
+explicit section title, the synthetic text-watermark preset, and one fade-to-black boundary:
+
+    npm run build
+    SMOKE_HYBRID=1 SMOKE_PRESENTATION=1 npm run smoke:render
+
+It is intentionally not part of unit tests because it starts Chromium and FFmpeg. While Media
+Indexer corpus ingestion is active, leave this command pending. After ingestion, inspect
+data/smoke/presentation-engine-render.mp4 and the adjacent JSON report, including H.264, 1920x1080,
+30 fps, yuv420p, one AAC 48 kHz stream, expected duration/frame count, sampled overlay frames,
+second-run cache reuse, and stable fingerprints.

@@ -64,3 +64,8 @@ narration/source/proxy cache reuse. No external provider or operator media is ac
 Images are streamed from the managed source cache and rendered directly by Remotion. They are
 not expanded into frame sequences or intermediate MP4s. Metadata and content must agree on
 logical ID, project, `media_kind=image`, MIME, byte size, and SHA-256.
+
+`tests/fixtures/production_timeline_v2_contract.json` is the canonical small cross-service
+contract fixture, mirrored byte-for-byte in the Orchestrator tests. It must continue to parse as
+`video_segment -> static_image`; enum, MIME, or source-union drift is expected to fail CI before
+reaching a render worker.

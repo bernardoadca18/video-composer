@@ -12,35 +12,45 @@ const VideoSourceFields = {
   candidate_end_seconds: z.number().finite().positive(),
   source_start_seconds: Seconds,
   source_end_seconds: z.number().finite().positive(),
+  provenance: z.record(z.string(), z.unknown()).optional(),
 };
 
-export const TimelineGameplaySourceSchema = z.object({
-  source_type: z.literal('gameplay'),
-  ...VideoSourceFields,
-});
+export const TimelineGameplaySourceSchema = z
+  .object({
+    source_type: z.literal('gameplay'),
+    ...VideoSourceFields,
+  })
+  .strict();
 
-export const TimelineVideoSegmentSourceSchema = z.object({
-  source_type: z.literal('video_segment'),
-  ...VideoSourceFields,
-});
+export const TimelineVideoSegmentSourceSchema = z
+  .object({
+    source_type: z.literal('video_segment'),
+    ...VideoSourceFields,
+  })
+  .strict();
 
-export const TimelineStaticImageSourceSchema = z.object({
-  source_type: z.literal('static_image'),
-  project_id: Id,
-  media_id: Id,
-  image_semantic_index_id: Id,
-  expected_sha256: Sha256,
-  expected_byte_size: z.number().int().nonnegative(),
-  content_type: z.enum(['image/jpeg', 'image/png', 'image/webp']),
-});
+export const TimelineStaticImageSourceSchema = z
+  .object({
+    source_type: z.literal('static_image'),
+    project_id: Id,
+    media_id: Id,
+    image_semantic_index_id: Id,
+    expected_sha256: Sha256,
+    expected_byte_size: z.number().int().nonnegative(),
+    content_type: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    provenance: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
 
-export const StaticImagePresentationSchema = z.object({
-  policy_version: z.literal('static_image_presentation_v1'),
-  fit: z.enum(['cover', 'contain']),
-  background: z.enum(['black', 'blurred_fill']),
-  motion: z.enum(['none', 'slow_zoom_in', 'slow_zoom_out']),
-  zoom_amount: z.number().finite().min(0).max(0.1),
-});
+export const StaticImagePresentationSchema = z
+  .object({
+    policy_version: z.literal('static_image_presentation_v1'),
+    fit: z.enum(['cover', 'contain']),
+    background: z.enum(['black', 'blurred_fill']),
+    motion: z.enum(['none', 'slow_zoom_in', 'slow_zoom_out']),
+    zoom_amount: z.number().finite().min(0).max(0.1),
+  })
+  .strict();
 
 export const TimelinePlacementV1Schema = z.object({
   id: Id,

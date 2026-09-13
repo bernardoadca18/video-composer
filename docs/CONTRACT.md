@@ -49,3 +49,9 @@ V2 produces `render_manifest_v2` (`video_composer_v2_hybrid_sources`). Image pla
 the frozen presentation selected upstream: `cover|contain`, `black|blurred_fill`, and
 `none|slow_zoom_in|slow_zoom_out`. Holds are timeline time and quantize through the same shared
 frame-boundary algorithm as video. Final renders remain gap-free and source audio remains muted.
+
+The Orchestrator owns editorial hold policy (currently 2 s minimum, 5 s preferred, 8 s maximum,
+and 15 s maximum consecutive still duration) and freezes its result in Timeline V2. The Composer
+does not duplicate or reinterpret those tunable limits: it validates positive, non-overlapping,
+frameable placements plus the strict source/presentation/integrity contract, then renders exactly
+the approved hold.

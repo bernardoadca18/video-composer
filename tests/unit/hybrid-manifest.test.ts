@@ -156,12 +156,12 @@ describe('hybrid render manifest', () => {
     expect(() => build(hybridTimeline(), imageMetadata({ content_type: 'image/jpeg' }))).toThrow();
   });
 
-  it('enforces static hold bounds before rendering', () => {
+  it('renders a frozen hold without duplicating upstream editorial limits', () => {
     const timeline = hybridTimeline();
     timeline.duration_seconds = 12;
     timeline.tracks.narration!.timeline_end_seconds = 12;
     timeline.tracks.narration!.source_end_seconds = 12;
     timeline.tracks.primary_visual.placements[1]!.timeline_end_seconds = 12;
-    expect(() => build(timeline)).toThrow('Static image contract is invalid');
+    expect(build(timeline).manifest.placements[1]).toMatchObject({ frame_duration: 270 });
   });
 });

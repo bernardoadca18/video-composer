@@ -322,7 +322,6 @@ const buildRenderManifestV2 = (
   const quantized = quantizeBoundaries(timeline.duration_seconds, boundaries, profile.fps);
   let previousEndUs = 0n;
   let previousEndFrame = 0;
-  let consecutiveStaticUs = 0n;
   const manifestPlacements = placements.map((item) => {
     const timelineStartUs = secondsToMicroseconds(item.timeline_start_seconds);
     const timelineEndUs = secondsToMicroseconds(item.timeline_end_seconds);
@@ -358,12 +357,7 @@ const buildRenderManifestV2 = (
     previousEndUs = timelineEndUs;
     previousEndFrame = frameEnd;
     if (item.source.source_type === 'static_image') {
-      const holdUs = timelineEndUs - timelineStartUs;
-      consecutiveStaticUs += holdUs;
       if (
-        holdUs < 2_000_000n ||
-        holdUs > 8_000_000n ||
-        consecutiveStaticUs > 15_000_000n ||
         asset.media_kind !== 'image' ||
         asset.sha256 !== item.source.expected_sha256 ||
         asset.byte_size !== item.source.expected_byte_size ||
@@ -389,7 +383,6 @@ const buildRenderManifestV2 = (
         presentation: item.presentation,
       };
     }
-    consecutiveStaticUs = 0n;
     const candidateStartUs = secondsToMicroseconds(item.source.candidate_start_seconds);
     const candidateEndUs = secondsToMicroseconds(item.source.candidate_end_seconds);
     const sourceStartUs = secondsToMicroseconds(item.source.source_start_seconds);

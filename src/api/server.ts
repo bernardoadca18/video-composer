@@ -13,6 +13,9 @@ import { sendControlledFile } from './files.js';
 
 const IdParams = z.object({ id: z.string().uuid() });
 const AssetParams = z.object({ key: z.string().regex(/^[a-f0-9]{64}$/) });
+const ImageAssetQuery = z.object({
+  content_type: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+});
 
 export interface ServerContext {
   config: AppConfig;
@@ -127,6 +130,17 @@ export const buildServer = (context: ServerContext): FastifyInstance => {
       reply,
       path.join(context.config.proxyCacheRoot, `${key}.mp4`),
       'video/mp4',
+    );
+  });
+
+  server.get('/internal-assets/image/:key', async (request, reply) => {
+    const { key } = AssetParams.parse(request.params);
+    const { content_type: contentType } = ImageAssetQuery.parse(request.query);
+    return await sendControlledFile(
+      request,
+      reply,
+      path.join(context.config.sourceCacheRoot, `${key}.media`),
+      contentType,
     );
   });
 

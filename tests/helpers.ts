@@ -4,8 +4,8 @@ import type { AppConfig } from '../src/core/config.js';
 import { fingerprint } from '../src/core/identity.js';
 import type {
   MediaAssetMetadata,
-  ProductionTimeline,
-  RenderManifest,
+  ProductionTimelineV1,
+  RenderManifestV1,
 } from '../src/domain/contracts.js';
 import { buildRenderManifest } from '../src/domain/manifest.js';
 import { youtube1080p30V1 } from '../src/domain/profiles.js';
@@ -49,6 +49,7 @@ export const testConfig = (root: string): AppConfig => ({
 export const mediaMetadata = (overrides: Partial<MediaAssetMetadata> = {}): MediaAssetMetadata => ({
   id: MEDIA_ID,
   project_id: PROJECT_ID,
+  media_kind: 'video',
   original_filename: 'gameplay.mp4',
   content_type: 'video/mp4',
   byte_size: 1234,
@@ -64,8 +65,8 @@ export const mediaMetadata = (overrides: Partial<MediaAssetMetadata> = {}): Medi
 });
 
 export const productionTimeline = (
-  overrides: Partial<ProductionTimeline> = {},
-): ProductionTimeline => ({
+  overrides: Partial<ProductionTimelineV1> = {},
+): ProductionTimelineV1 => ({
   id: TIMELINE_ID,
   workflow_id: WORKFLOW_ID,
   schema_version: 'production_timeline_schema_v1',
@@ -132,7 +133,7 @@ export const productionTimeline = (
   ...overrides,
 });
 
-export const renderManifest = (root: string): RenderManifest =>
+export const renderManifest = (root: string): RenderManifestV1 =>
   buildRenderManifest(
     productionTimeline(),
     new Map([[MEDIA_ID, mediaMetadata()]]),

@@ -5,7 +5,10 @@ import {
   type MediaAssetMetadata,
   type ProductionTimeline,
   type RenderManifest,
-  RenderManifestSchema,
+  type RenderManifestV1,
+  type RenderManifestV2,
+  RenderManifestV1Schema,
+  RenderManifestV2Schema,
 } from './contracts.js';
 import { quantizeBoundaries, secondsToMicroseconds } from './quantization.js';
 
@@ -70,13 +73,13 @@ const requireTimeline = (
   }
 };
 
-export const buildRenderManifest = (
-  timeline: ProductionTimeline,
+const buildRenderManifestV1 = (
+  timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v1' }>,
   metadata: ReadonlyMap<string, MediaAssetMetadata>,
   profile: RenderProfile,
   mode: 'preview' | 'final',
   config: AppConfig,
-): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string } => {
+): { manifest: RenderManifestV1; manifestFingerprint: string; renderFingerprint: string } => {
   requireTimeline(timeline, profile, mode, config);
   const narration = timeline.tracks.narration;
   if (!narration) throw new ManifestValidationError('invalid_timeline', 'Narration is missing');
@@ -231,7 +234,7 @@ export const buildRenderManifest = (
   if (uniqueAssets.length > config.maxSourceAssets) {
     throw new ManifestValidationError('render_limit', 'Timeline exceeds source asset limit');
   }
-  const manifest = RenderManifestSchema.parse({
+  const manifest = RenderManifestV1Schema.parse({
     schema_version: 'render_manifest_v1',
     composer_strategy_version: 'video_composer_v1',
     proxy_strategy_version: 'clip_proxy_v1',
@@ -277,3 +280,286 @@ export const buildRenderManifest = (
     }),
   };
 };
+
+const buildRenderManifestV2 = (
+  timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v2' }>,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+): { manifest: RenderManifestV2; manifestFingerprint: string; renderFingerprint: string } => {
+  if (!['completed', 'completed_with_gaps'].includes(timeline.status)) {
+    throw new ManifestValidationError('invalid_timeline', 'Timeline is not completed');
+  }
+  const narration = timeline.tracks.narration;
+  if (!narration) throw new ManifestValidationError('invalid_timeline', 'Narration is missing');
+  const durationUs = secondsToMicroseconds(timeline.duration_seconds);
+  if (
+    secondsToMicroseconds(narration.timeline_start_seconds) !== 0n ||
+    secondsToMicroseconds(narration.source_start_seconds) !== 0n ||
+    secondsToMicroseconds(narration.timeline_end_seconds) !== durationUs ||
+    secondsToMicroseconds(narration.source_end_seconds) !== durationUs
+  ) {
+    throw new ManifestValidationError('invalid_timeline', 'Narration track is inconsistent');
+  }
+  if (timeline.duration_seconds > config.maxRenderDurationSeconds) {
+    throw new ManifestValidationError('render_limit', 'Timeline exceeds maximum duration');
+  }
+  const placements = [...timeline.tracks.primary_visual.placements].sort(
+    (left, right) => left.order - right.order,
+  );
+  const gaps = [...timeline.gaps].sort((left, right) => left.order - right.order);
+  if (placements.length > config.maxPlacements) {
+    throw new ManifestValidationError('render_limit', 'Timeline exceeds placement limit');
+  }
+  if (mode === 'final' && (gaps.length > 0 || timeline.visual_coverage_ratio !== 1)) {
+    throw new ManifestValidationError('forbidden_visual_gap', 'Final mode requires full coverage');
+  }
+  const boundaries = [
+    ...placements.flatMap((item) => [item.timeline_start_seconds, item.timeline_end_seconds]),
+    ...gaps.flatMap((item) => [item.timeline_start_seconds, item.timeline_end_seconds]),
+  ];
+  const quantized = quantizeBoundaries(timeline.duration_seconds, boundaries, profile.fps);
+  let previousEndUs = 0n;
+  let previousEndFrame = 0;
+  let consecutiveStaticUs = 0n;
+  const manifestPlacements = placements.map((item) => {
+    const timelineStartUs = secondsToMicroseconds(item.timeline_start_seconds);
+    const timelineEndUs = secondsToMicroseconds(item.timeline_end_seconds);
+    const frameStart = quantized.frameAt(item.timeline_start_seconds);
+    const frameEnd = quantized.frameAt(item.timeline_end_seconds);
+    if (
+      timelineStartUs < previousEndUs ||
+      timelineEndUs <= timelineStartUs ||
+      timelineEndUs > durationUs ||
+      frameStart < previousEndFrame ||
+      frameEnd <= frameStart ||
+      item.transition !== 'cut'
+    ) {
+      throw new ManifestValidationError('invalid_timeline', 'Invalid placement range');
+    }
+    const asset = metadata.get(item.source.media_id);
+    if (
+      !asset ||
+      asset.id !== item.source.media_id ||
+      asset.project_id !== item.source.project_id
+    ) {
+      throw new ManifestValidationError('source_identity', 'Media asset identity mismatch');
+    }
+    const base = {
+      id: item.id,
+      order: item.order,
+      frame_start: frameStart,
+      frame_duration: frameEnd - frameStart,
+      timeline_start_microseconds: asNumber(timelineStartUs),
+      timeline_end_microseconds: asNumber(timelineEndUs),
+      transition: 'cut' as const,
+    };
+    previousEndUs = timelineEndUs;
+    previousEndFrame = frameEnd;
+    if (item.source.source_type === 'static_image') {
+      const holdUs = timelineEndUs - timelineStartUs;
+      consecutiveStaticUs += holdUs;
+      if (
+        holdUs < 2_000_000n ||
+        holdUs > 8_000_000n ||
+        consecutiveStaticUs > 15_000_000n ||
+        asset.media_kind !== 'image' ||
+        asset.sha256 !== item.source.expected_sha256 ||
+        asset.byte_size !== item.source.expected_byte_size ||
+        asset.content_type !== item.source.content_type
+      ) {
+        throw new ManifestValidationError('source_identity', 'Static image contract is invalid');
+      }
+      return {
+        ...base,
+        source: {
+          source_type: 'static_image' as const,
+          project_id: item.source.project_id,
+          media_id: item.source.media_id,
+          image_semantic_index_id: item.source.image_semantic_index_id,
+          sha256: asset.sha256,
+          byte_size: asset.byte_size,
+          content_type: item.source.content_type,
+          asset_url:
+            `${config.internalAssetBaseUrl}/internal-assets/image/${asset.sha256}` +
+            `?content_type=${encodeURIComponent(item.source.content_type)}`,
+        },
+        playback_rate: null,
+        presentation: item.presentation,
+      };
+    }
+    consecutiveStaticUs = 0n;
+    const candidateStartUs = secondsToMicroseconds(item.source.candidate_start_seconds);
+    const candidateEndUs = secondsToMicroseconds(item.source.candidate_end_seconds);
+    const sourceStartUs = secondsToMicroseconds(item.source.source_start_seconds);
+    const sourceEndUs = secondsToMicroseconds(item.source.source_end_seconds);
+    if (
+      item.playback_rate !== 1 ||
+      asset.media_kind !== 'video' ||
+      candidateEndUs <= candidateStartUs ||
+      sourceStartUs < candidateStartUs ||
+      sourceEndUs > candidateEndUs ||
+      sourceEndUs - sourceStartUs !== timelineEndUs - timelineStartUs ||
+      (asset.duration_seconds !== null &&
+        sourceEndUs > secondsToMicroseconds(asset.duration_seconds))
+    ) {
+      throw new ManifestValidationError('source_identity', 'Video segment contract is invalid');
+    }
+    const proxyKey = fingerprint({
+      strategy: 'clip_proxy_v1',
+      source_sha256: asset.sha256,
+      source_start_microseconds: sourceStartUs.toString(),
+      source_end_microseconds: sourceEndUs.toString(),
+      fps: profile.fps,
+      codec: 'h264',
+      pixel_format: 'yuv420p',
+    });
+    return {
+      ...base,
+      source: {
+        source_type: 'video_segment' as const,
+        project_id: item.source.project_id,
+        session_id: item.source.session_id,
+        media_id: item.source.media_id,
+        sha256: asset.sha256,
+        candidate_start_microseconds: asNumber(candidateStartUs),
+        candidate_end_microseconds: asNumber(candidateEndUs),
+        source_start_microseconds: asNumber(sourceStartUs),
+        source_end_microseconds: asNumber(sourceEndUs),
+        proxy_key: proxyKey,
+        proxy_url: `${config.internalAssetBaseUrl}/internal-assets/proxy/${proxyKey}`,
+      },
+      playback_rate: 1 as const,
+      presentation: null,
+    };
+  });
+  const manifestGaps = gaps.map((item) => {
+    const frameStart = quantized.frameAt(item.timeline_start_seconds);
+    const frameEnd = quantized.frameAt(item.timeline_end_seconds);
+    if (frameEnd <= frameStart) {
+      throw new ManifestValidationError('frame_quantization', 'Gap collapsed to zero frames');
+    }
+    return {
+      id: item.id,
+      order: item.order,
+      frame_start: frameStart,
+      frame_duration: frameEnd - frameStart,
+      reason: item.reason,
+      severity: item.severity,
+    };
+  });
+  const expectedGaps: Array<[bigint, bigint]> = [];
+  let gapCursor = 0n;
+  for (const item of placements) {
+    const start = secondsToMicroseconds(item.timeline_start_seconds);
+    const end = secondsToMicroseconds(item.timeline_end_seconds);
+    if (start > gapCursor) expectedGaps.push([gapCursor, start]);
+    gapCursor = end;
+  }
+  if (gapCursor < durationUs) expectedGaps.push([gapCursor, durationUs]);
+  const actualGaps = gaps.map(
+    (item) =>
+      [
+        secondsToMicroseconds(item.timeline_start_seconds),
+        secondsToMicroseconds(item.timeline_end_seconds),
+      ] as [bigint, bigint],
+  );
+  if (
+    JSON.stringify(expectedGaps.map((item) => item.map(String))) !==
+    JSON.stringify(actualGaps.map((item) => item.map(String)))
+  ) {
+    throw new ManifestValidationError('invalid_timeline', 'Gaps are not the visual complement');
+  }
+  const uniqueAssets = [...metadata.values()]
+    .map((item) => ({
+      media_id: item.id,
+      project_id: item.project_id,
+      media_kind: item.media_kind,
+      sha256: item.sha256,
+      byte_size: item.byte_size,
+      content_type: item.content_type,
+    }))
+    .sort((left, right) => left.media_id.localeCompare(right.media_id));
+  if (uniqueAssets.length > config.maxSourceAssets) {
+    throw new ManifestValidationError('render_limit', 'Timeline exceeds source asset limit');
+  }
+  const manifest = RenderManifestV2Schema.parse({
+    schema_version: 'render_manifest_v2',
+    composer_strategy_version: 'video_composer_v2_hybrid_sources',
+    proxy_strategy_version: 'clip_proxy_v1',
+    workflow_id: timeline.workflow_id,
+    production_timeline_id: timeline.id,
+    production_timeline_fingerprint: timeline.fingerprint,
+    mode,
+    duration_seconds: timeline.duration_seconds,
+    duration_in_frames: quantized.durationInFrames,
+    render_profile: {
+      name: profile.name,
+      identity: profile.identity,
+      width: profile.width,
+      height: profile.height,
+      fps: profile.fps,
+      fit_mode: profile.fitMode,
+      background_color: profile.backgroundColor,
+    },
+    narration: {
+      sha256: narration.audio_sha256,
+      byte_size: narration.byte_size,
+      sample_rate: narration.sample_rate,
+      channels: narration.channels,
+      asset_key: narration.audio_sha256,
+      asset_url: `${config.internalAssetBaseUrl}/internal-assets/narration/${narration.audio_sha256}`,
+      frame_start: 0,
+      frame_duration: quantized.durationInFrames,
+    },
+    source_assets: uniqueAssets,
+    placements: manifestPlacements,
+    gaps: manifestGaps,
+  });
+  const manifestFingerprint = fingerprint(manifest);
+  return {
+    manifest,
+    manifestFingerprint,
+    renderFingerprint: fingerprint({
+      manifest_fingerprint: manifestFingerprint,
+      composer_strategy_version: 'video_composer_v2_hybrid_sources',
+      remotion_version: '4.0.516',
+      render_profile_identity: profile.identity,
+      mode,
+    }),
+  };
+};
+
+export function buildRenderManifest(
+  timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v1' }>,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+): { manifest: RenderManifestV1; manifestFingerprint: string; renderFingerprint: string };
+export function buildRenderManifest(
+  timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v2' }>,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+): { manifest: RenderManifestV2; manifestFingerprint: string; renderFingerprint: string };
+export function buildRenderManifest(
+  timeline: ProductionTimeline,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string };
+export function buildRenderManifest(
+  timeline: ProductionTimeline,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
+): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string } {
+  return timeline.schema_version === 'production_timeline_schema_v2'
+    ? buildRenderManifestV2(timeline, metadata, profile, mode, config)
+    : buildRenderManifestV1(timeline, metadata, profile, mode, config);
+}

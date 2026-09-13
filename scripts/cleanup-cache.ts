@@ -16,7 +16,9 @@ try {
       protectedPaths.add(path.join(config.sourceCacheRoot, `${asset.sha256}.media`));
     }
     for (const placement of job.manifest.placements) {
-      protectedPaths.add(path.join(config.proxyCacheRoot, `${placement.source.proxy_key}.mp4`));
+      if ('proxy_key' in placement.source) {
+        protectedPaths.add(path.join(config.proxyCacheRoot, `${placement.source.proxy_key}.mp4`));
+      }
     }
   }
   const result = await cleanupCache(

@@ -18,14 +18,17 @@ export interface PreparedProxy {
   height: number;
 }
 
-type ManifestPlacement = RenderManifest['placements'][number];
+export type ProxyPlacement = Extract<
+  RenderManifest['placements'][number],
+  { source: { proxy_key: string } }
+>;
 
 const seconds = (microseconds: number): string => (microseconds / 1_000_000).toFixed(6);
 
 export class ClipProxyPreparer {
   constructor(private readonly config: AppConfig) {}
 
-  private async validate(target: string, placement: ManifestPlacement): Promise<PreparedProxy> {
+  private async validate(target: string, placement: ProxyPlacement): Promise<PreparedProxy> {
     const probe = await probeMedia(this.config.ffprobeBinary, target);
     const video = probe.streams.filter((item) => item.codec_type === 'video');
     const audio = probe.streams.filter((item) => item.codec_type === 'audio');
@@ -59,7 +62,7 @@ export class ClipProxyPreparer {
     };
   }
 
-  async prepare(sourcePath: string, placement: ManifestPlacement): Promise<PreparedProxy> {
+  async prepare(sourcePath: string, placement: ProxyPlacement): Promise<PreparedProxy> {
     const target = path.join(this.config.proxyCacheRoot, `${placement.source.proxy_key}.mp4`);
     return await withFileLock(`${target}.lock`, async () => {
       try {

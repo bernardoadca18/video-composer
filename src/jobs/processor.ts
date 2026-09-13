@@ -3,10 +3,9 @@ import path from 'node:path';
 
 import type { AppConfig } from '../core/config.js';
 import { ComposerError, publicError } from '../core/errors.js';
-import type { RenderManifest } from '../domain/contracts.js';
-import { validateNarration } from '../media/probe.js';
+import { validateNarration, validateStaticImage } from '../media/probe.js';
 import { validateOutput } from '../media/output-validator.js';
-import type { ClipProxyPreparer } from '../media/proxy.js';
+import type { ClipProxyPreparer, ProxyPlacement } from '../media/proxy.js';
 import type { VideoRenderer } from '../remotion/renderer.js';
 import type {
   GameplaySourceResolver,
@@ -57,10 +56,15 @@ export class RenderJobProcessor {
         );
         sourcePaths.set(asset.sha256, source.path);
         if (source.cacheHit) sourceCacheHits += 1;
+        if ('media_kind' in asset && asset.media_kind === 'image') {
+          await validateStaticImage(this.config.ffprobeBinary, source.path);
+        }
       }
-      const uniqueProxies = new Map<string, RenderManifest['placements'][number]>();
+      const uniqueProxies = new Map<string, ProxyPlacement>();
       for (const placement of job.manifest.placements) {
-        uniqueProxies.set(placement.source.proxy_key, placement);
+        if ('proxy_key' in placement.source) {
+          uniqueProxies.set(placement.source.proxy_key, placement as ProxyPlacement);
+        }
       }
       let proxyCacheHits = 0;
       for (const placement of uniqueProxies.values()) {
@@ -109,7 +113,7 @@ export class RenderJobProcessor {
           proxyCacheHits,
           proxyCount: uniqueProxies.size,
           remotionVersion: '4.0.516',
-          composerStrategyVersion: 'video_composer_v1',
+          composerStrategyVersion: job.manifest.composer_strategy_version,
         },
       );
       console.info(

@@ -76,3 +76,12 @@ export const validateNarration = async (
     throw new ComposerError('narration_validation_failure', 'Narration must be 48 kHz');
   }
 };
+
+export const validateStaticImage = async (ffprobe: string, filePath: string): Promise<void> => {
+  const probe = await probeMedia(ffprobe, filePath);
+  const video = probe.streams.filter((item) => item.codec_type === 'video');
+  const audio = probe.streams.filter((item) => item.codec_type === 'audio');
+  if (video.length !== 1 || audio.length !== 0 || !video[0]?.width || !video[0].height) {
+    throw new ComposerError('image_validation_failure', 'Static image is invalid');
+  }
+};

@@ -81,7 +81,8 @@ describe('render job safety', () => {
       {
         prepare: async (_source: string, placement: (typeof job.manifest.placements)[number]) => ({
           path: sourcePath,
-          key: placement.source.proxy_key,
+          key:
+            'proxy_key' in placement.source ? placement.source.proxy_key : placement.source.sha256,
           cacheHit: false,
           durationSeconds: 3,
           width: 640,

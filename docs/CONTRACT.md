@@ -36,3 +36,16 @@ the authoritative timeline.
 
 Unsupported future source types, transitions or playback rates fail explicitly. The Composer never
 selects an alternative source.
+
+# Hybrid timeline V2
+
+In addition to the existing `production_timeline_schema_v1`/`gameplay` input, the Composer
+accepts `production_timeline_schema_v2` with a strict `video_segment | static_image` union.
+Video segments retain real candidate and trim ranges with playback rate 1. Static images carry
+logical project/media/ImageSemanticIndex identity, expected SHA-256, byte size and image MIME,
+and explicitly carry no session or source time.
+
+V2 produces `render_manifest_v2` (`video_composer_v2_hybrid_sources`). Image placements include
+the frozen presentation selected upstream: `cover|contain`, `black|blurred_fill`, and
+`none|slow_zoom_in|slow_zoom_out`. Holds are timeline time and quantize through the same shared
+frame-boundary algorithm as video. Final renders remain gap-free and source audio remains muted.

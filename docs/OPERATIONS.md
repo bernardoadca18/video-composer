@@ -46,3 +46,21 @@ npm run smoke:render
 
 This exercises Remotion, Chromium, FFmpeg, SQLite, caches and output validation inside the built
 image. The default smoke still starts an isolated host process when those variables are absent.
+
+# Hybrid smoke
+
+Run the deterministic local four-source smoke after building:
+
+```bash
+npm run build
+SMOKE_HYBRID=1 npm run smoke:render
+```
+
+It generates local narration, a synthetic video with audio, portrait and landscape PNGs, then
+renders video → image → video → image. The review artifact is retained at
+`data/smoke/hybrid-engine-render.mp4`; JSON metrics are written beside it. A second render proves
+narration/source/proxy cache reuse. No external provider or operator media is accessed.
+
+Images are streamed from the managed source cache and rendered directly by Remotion. They are
+not expanded into frame sequences or intermediate MP4s. Metadata and content must agree on
+logical ID, project, `media_kind=image`, MIME, byte size, and SHA-256.

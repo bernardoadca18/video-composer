@@ -1,5 +1,14 @@
 import React from 'react';
-import { AbsoluteFill, Audio, Composition, OffthreadVideo, Sequence } from 'remotion';
+import {
+  AbsoluteFill,
+  Audio,
+  Composition,
+  Img,
+  OffthreadVideo,
+  Sequence,
+  interpolate,
+  useCurrentFrame,
+} from 'remotion';
 
 import { type RenderManifest, RenderManifestSchema } from '../domain/contracts.js';
 
@@ -11,6 +20,56 @@ const GameplayPlacement: React.FC<{
     <OffthreadVideo muted src={source} style={{ width: '100%', height: '100%', objectFit: fit }} />
   </AbsoluteFill>
 );
+
+const StaticImagePlacement: React.FC<{
+  source: string;
+  durationInFrames: number;
+  presentation: {
+    fit: 'cover' | 'contain';
+    background: 'black' | 'blurred_fill';
+    motion: 'none' | 'slow_zoom_in' | 'slow_zoom_out';
+    zoom_amount: number;
+  };
+}> = ({ source, durationInFrames, presentation }) => {
+  const frame = useCurrentFrame();
+  const progress = interpolate(frame, [0, Math.max(1, durationInFrames - 1)], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const scale =
+    presentation.motion === 'slow_zoom_in'
+      ? 1 + presentation.zoom_amount * progress
+      : presentation.motion === 'slow_zoom_out'
+        ? 1 + presentation.zoom_amount * (1 - progress)
+        : 1;
+  return (
+    <AbsoluteFill style={{ backgroundColor: '#000000', overflow: 'hidden' }}>
+      {presentation.background === 'blurred_fill' ? (
+        <Img
+          src={source}
+          style={{
+            filter: 'blur(36px)',
+            height: '100%',
+            objectFit: 'cover',
+            opacity: 0.72,
+            transform: 'scale(1.12)',
+            width: '100%',
+          }}
+        />
+      ) : null}
+      <Img
+        src={source}
+        style={{
+          height: '100%',
+          objectFit: presentation.fit,
+          position: 'absolute',
+          transform: `scale(${scale})`,
+          width: '100%',
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
 
 const PreviewGap: React.FC = () => (
   <AbsoluteFill
@@ -39,10 +98,27 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
           durationInFrames={placement.frame_duration}
           layout="none"
         >
-          <GameplayPlacement
-            source={placement.source.proxy_url}
-            fit={manifest.render_profile.fit_mode}
-          />
+          {'source_type' in placement.source && placement.source.source_type === 'static_image' ? (
+            <StaticImagePlacement
+              source={placement.source.asset_url}
+              durationInFrames={placement.frame_duration}
+              presentation={
+                'presentation' in placement && placement.presentation
+                  ? placement.presentation
+                  : {
+                      fit: 'contain',
+                      background: 'black',
+                      motion: 'none',
+                      zoom_amount: 0,
+                    }
+              }
+            />
+          ) : (
+            <GameplayPlacement
+              source={placement.source.proxy_url}
+              fit={manifest.render_profile.fit_mode}
+            />
+          )}
         </Sequence>
       ))}
       {manifest.mode === 'preview'

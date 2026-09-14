@@ -19,8 +19,9 @@ const IMAGE_ID = '55555555-5555-4555-8555-555555555556';
 const IMAGE_INDEX_ID = '77777777-7777-4777-8777-777777777777';
 const IMAGE_2_ID = '55555555-5555-4555-8555-555555555557';
 const IMAGE_2_INDEX_ID = '77777777-7777-4777-8777-777777777778';
-const hybrid = process.env.SMOKE_HYBRID === '1';
-const presentationEnabled = process.env.SMOKE_PRESENTATION === '1';
+const programAudioEnabled = process.env.SMOKE_PROGRAM_AUDIO === '1';
+const hybrid = process.env.SMOKE_HYBRID === '1' || programAudioEnabled;
+const presentationEnabled = process.env.SMOKE_PRESENTATION === '1' || programAudioEnabled;
 const servicePort = Number(process.env.SMOKE_COMPOSER_PORT ?? 18013);
 const upstreamPort = servicePort + 1;
 const externalComposerUrl = process.env.SMOKE_EXTERNAL_COMPOSER_URL;
@@ -81,6 +82,35 @@ const extractPixel = async (filePath: string, seconds: number): Promise<number[]
       }
     });
   });
+
+const differentialMeanVolume = async (
+  filePath: string,
+  start: number,
+  duration: number,
+): Promise<number> => {
+  const result = await runProcess(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-nostats',
+      '-ss',
+      String(start),
+      '-t',
+      String(duration),
+      '-i',
+      filePath,
+      '-af',
+      'pan=mono|c0=c0-c1,volumedetect',
+      '-f',
+      'null',
+      '-',
+    ],
+    'smoke_audio_analysis_failure',
+  );
+  const match = /mean_volume:\s*(-?[0-9.]+) dB/.exec(result.stderr);
+  if (!match) throw new Error('Differential music measurement is unavailable');
+  return Number(match[1]);
+};
 
 interface RegionStats {
   mean_rgb: [number, number, number];
@@ -154,6 +184,7 @@ const main = async (): Promise<void> => {
   const imagePath = path.join(temporary, 'still.png');
   const image2Path = path.join(temporary, 'still-landscape.png');
   const narrationPath = path.join(temporary, 'narration.wav');
+  const musicPath = path.join(temporary, 'music.wav');
   const realNarrationUrl = process.env.REAL_NARRATION_URL;
   if (realNarrationUrl) {
     const response = await fetch(realNarrationUrl);
@@ -168,11 +199,31 @@ const main = async (): Promise<void> => {
         '-f',
         'lavfi',
         '-i',
-        `sine=frequency=440:sample_rate=48000:duration=${hybrid ? 12 : 6}`,
+        programAudioEnabled
+          ? 'aevalsrc=if(between(t\\,0.5\\,3)+between(t\\,7\\,9)\\,0.18*sin(2*PI*440*t)\\,0):s=48000:d=12'
+          : `sine=frequency=440:sample_rate=48000:duration=${hybrid ? 12 : 6}`,
         '-c:a',
         'pcm_s16le',
         '-y',
         narrationPath,
+      ],
+      'smoke_fixture_failure',
+    );
+  }
+  if (programAudioEnabled) {
+    await runProcess(
+      'ffmpeg',
+      [
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'aevalsrc=0.12*sin(2*PI*220*t)|0.12*sin(2*PI*330*t):s=48000:d=12',
+        '-c:a',
+        'pcm_s24le',
+        '-y',
+        musicPath,
       ],
       'smoke_fixture_failure',
     );
@@ -269,6 +320,8 @@ const main = async (): Promise<void> => {
     stat(imagePath),
     stat(image2Path),
   ]);
+  const musicSha = programAudioEnabled ? await sha256File(musicPath) : null;
+  const musicStat = programAudioEnabled ? await stat(musicPath) : null;
   const timeline = {
     id: TIMELINE_ID,
     workflow_id: WORKFLOW_ID,
@@ -466,16 +519,108 @@ const main = async (): Promise<void> => {
   const presentation = presentationEnabled
     ? { ...presentationContent, fingerprint: fingerprint(presentationContent) }
     : null;
+  const audioMixContent =
+    programAudioEnabled && musicSha && musicStat
+      ? {
+          schema_version: 'audio_mix_plan_v1',
+          strategy_version: 'longform_program_audio_v1',
+          profile_id: 'music_mix_profile_v1_candidate',
+          duration_seconds: duration,
+          narration: {
+            sha256: narrationSha,
+            duration_seconds: duration,
+            sample_rate: 48_000,
+            channels: 1,
+          },
+          music: {
+            enabled: true,
+            asset: {
+              asset_id: 'synthetic-smoke-v1',
+              sha256: musicSha,
+              byte_size: musicStat.size,
+              content_type: 'audio/wav',
+              format: 'wav',
+              duration_seconds: duration,
+              sample_rate: 48_000,
+              channels: 2,
+              integrated_lufs: -21.4,
+              true_peak_dbtp: -18.4,
+              moods: ['analytical'],
+              styles: ['documentary'],
+              energy: 0.4,
+              vocals: false,
+              loopable: true,
+              source_owner: 'NeoVids synthetic smoke',
+              source_reference: 'FFmpeg deterministic dual-tone fixture',
+              license_type: 'owned',
+              monetization_allowed: true,
+              attribution_required: false,
+              attribution_text: null,
+            },
+            source_start_seconds: 0,
+            source_end_seconds: duration,
+            loop_policy: 'no_loop_v1',
+            normalization_policy: 'music_loudnorm_v1',
+            normalization_target_lufs: -23,
+            segments: [
+              {
+                start_seconds: 0,
+                end_seconds: duration,
+                gain_adjustment_db: 0,
+                fade_in_seconds: 0.25,
+                fade_out_seconds: 0.25,
+                transition_preset: 'smooth_v1',
+              },
+            ],
+          },
+          ducking: {
+            policy_version: 'speech_envelope_v1',
+            base_gain_db: -9,
+            ducked_gain_db: -20,
+            attack_seconds: 0.25,
+            release_seconds: 0.5,
+            merge_gap_seconds: 0.35,
+            speech_regions: [
+              { start_seconds: 0.5, end_seconds: 3 },
+              { start_seconds: 7, end_seconds: 9 },
+            ],
+          },
+          program_master: {
+            profile_id: 'youtube_program_master_v1_candidate',
+            policy_version: 'ffmpeg_loudnorm_two_pass_v1',
+            target_lufs: -14,
+            max_true_peak_dbtp: -1,
+            target_lra: 11,
+          },
+          output: {
+            profile_id: 'youtube_1080p30_program_audio_v1',
+            codec: 'aac',
+            bitrate: '192k',
+            sample_rate: 48_000,
+            channels: 2,
+          },
+        }
+      : null;
+  const audioMixPlan = audioMixContent
+    ? { ...audioMixContent, fingerprint: fingerprint(audioMixContent) }
+    : null;
   const upstream = Fastify({ logger: false });
   upstream.get(`/workflow/${WORKFLOW_ID}/production-timeline`, async () => timeline);
   upstream.get(`/workflow/${WORKFLOW_ID}/composer-render-input`, async () => ({
-    schema_version: 'composer_render_input_v1',
+    schema_version: programAudioEnabled
+      ? 'composer_render_input_v2'
+      : 'composer_render_input_v1',
     production_timeline: timeline,
     presentation,
+    ...(audioMixPlan ? { audio_mix_plan: audioMixPlan } : {}),
   }));
   upstream.get(
     `/workflow/${WORKFLOW_ID}/audio`,
     async (_request, reply) => await reply.type('audio/wav').send(createReadStream(narrationPath)),
+  );
+  upstream.get(
+    `/workflow/${WORKFLOW_ID}/music-assets/synthetic-smoke-v1`,
+    async (_request, reply) => await reply.type('audio/wav').send(createReadStream(musicPath)),
   );
   upstream.get(`/media-assets/${MEDIA_ID}`, async () => ({
     id: MEDIA_ID,
@@ -570,14 +715,18 @@ const main = async (): Promise<void> => {
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': presentationEnabled
-          ? 'presentation-engine-smoke'
+          ? programAudioEnabled
+            ? 'program-audio-engine-smoke'
+            : 'presentation-engine-smoke'
           : hybrid
             ? 'hybrid-engine-smoke'
             : 'stage16-engine-smoke',
       },
       body: JSON.stringify({
         workflow_id: WORKFLOW_ID,
-        render_profile: 'youtube_1080p30_v1',
+        render_profile: programAudioEnabled
+          ? 'youtube_1080p30_program_audio_v1'
+          : 'youtube_1080p30_v1',
         mode: 'final',
       }),
     });
@@ -592,7 +741,9 @@ const main = async (): Promise<void> => {
       realNarrationUrl
         ? 'real-narration-render.mp4'
         : presentationEnabled
-          ? 'presentation-engine-render.mp4'
+          ? programAudioEnabled
+            ? 'program-audio-engine-render.mp4'
+            : 'presentation-engine-render.mp4'
           : hybrid
             ? 'hybrid-engine-render.mp4'
             : 'engine-render.mp4',
@@ -664,19 +815,43 @@ const main = async (): Promise<void> => {
         `Presentation overlay inspection failed: ${JSON.stringify(overlayValidation)}`,
       );
     }
+    const programAudioMetrics = programAudioEnabled
+      ? ((completed.metrics as Record<string, unknown>).programAudio as Record<string, unknown>)
+      : null;
+    const duckingMeasurement = programAudioEnabled
+      ? {
+          speech_mean_db: await differentialMeanVolume(outputPath, 1.2, 0.8),
+          pause_mean_db: await differentialMeanVolume(outputPath, 4.2, 0.8),
+        }
+      : null;
+    if (
+      programAudioEnabled &&
+      (audio.channels !== 2 ||
+        !programAudioMetrics ||
+        !duckingMeasurement ||
+        duckingMeasurement.pause_mean_db - duckingMeasurement.speech_mean_db < 7)
+    ) {
+      throw new Error(
+        `Program Audio validation failed: ${JSON.stringify({ audio, programAudioMetrics, duckingMeasurement })}`,
+      );
+    }
     const cacheResponse = await fetch(`${baseUrl}/v1/renders`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': presentationEnabled
-          ? 'presentation-cache-smoke'
+          ? programAudioEnabled
+            ? 'program-audio-cache-smoke'
+            : 'presentation-cache-smoke'
           : hybrid
             ? 'hybrid-cache-smoke'
             : 'stage16-cache-smoke',
       },
       body: JSON.stringify({
         workflow_id: WORKFLOW_ID,
-        render_profile: 'youtube_1080p30_v1',
+        render_profile: programAudioEnabled
+          ? 'youtube_1080p30_program_audio_v1'
+          : 'youtube_1080p30_v1',
         mode: 'preview',
       }),
     });
@@ -691,8 +866,14 @@ const main = async (): Promise<void> => {
         cacheCompleted.presentation_fingerprint !== expectedPresentationFingerprint ||
         completed.production_timeline_fingerprint !==
           cacheCompleted.production_timeline_fingerprint ||
-        engineMetrics.composerStrategyVersion !== 'video_composer_v3_presentation' ||
-        cacheMetrics.composerStrategyVersion !== 'video_composer_v3_presentation')
+        engineMetrics.composerStrategyVersion !==
+          (programAudioEnabled
+            ? 'video_composer_v4_program_audio'
+            : 'video_composer_v3_presentation') ||
+        cacheMetrics.composerStrategyVersion !==
+          (programAudioEnabled
+            ? 'video_composer_v4_program_audio'
+            : 'video_composer_v3_presentation'))
     ) {
       throw new Error(
         `Presentation identity validation failed: ${JSON.stringify({ completed, cacheCompleted })}`,
@@ -702,7 +883,9 @@ const main = async (): Promise<void> => {
       smoke: realNarrationUrl
         ? 'REAL_NARRATION_RENDER_SMOKE'
         : presentationEnabled
-          ? 'PRESENTATION_RENDER_SMOKE'
+          ? programAudioEnabled
+            ? 'PROGRAM_AUDIO_RENDER_SMOKE'
+            : 'PRESENTATION_RENDER_SMOKE'
           : hybrid
             ? 'HYBRID_VISUAL_RENDER_SMOKE'
             : 'VIDEO_COMPOSER_ENGINE_SMOKE',
@@ -715,6 +898,7 @@ const main = async (): Promise<void> => {
       pixel_format: video.pix_fmt,
       audio_codec: audio.codec_name,
       audio_sample_rate: Number(audio.sample_rate),
+      audio_channels: audio.channels,
       duration_seconds: mediaDuration(outputProbe),
       frame_count: frameCount,
       expected_frame_count: expectedFrameCount,
@@ -725,7 +909,9 @@ const main = async (): Promise<void> => {
       engine_metrics: completed.metrics,
       second_render_cache_metrics: cacheCompleted.metrics,
       manifest_schema_version: presentationEnabled
-        ? 'render_manifest_v3'
+        ? programAudioEnabled
+          ? 'render_manifest_v4'
+          : 'render_manifest_v3'
         : hybrid
           ? 'render_manifest_v2'
           : 'render_manifest_v1',
@@ -733,6 +919,9 @@ const main = async (): Promise<void> => {
         ? presentationContent.strategy_version
         : null,
       presentation_fingerprint: completed.presentation_fingerprint ?? null,
+      audio_mix_plan_fingerprint: completed.audio_mix_plan_fingerprint ?? null,
+      program_audio_metrics: programAudioMetrics,
+      ducking_measurement: duckingMeasurement,
       manifest_fingerprint: completed.manifest_fingerprint,
       render_fingerprint: completed.render_fingerprint,
       second_manifest_fingerprint: cacheCompleted.manifest_fingerprint,
@@ -743,6 +932,8 @@ const main = async (): Promise<void> => {
           cacheCompleted.production_timeline_fingerprint,
         presentation:
           completed.presentation_fingerprint === cacheCompleted.presentation_fingerprint,
+        audio_mix_plan:
+          completed.audio_mix_plan_fingerprint === cacheCompleted.audio_mix_plan_fingerprint,
       },
       inspected_pixels: {
         video_one: beginning,
@@ -760,7 +951,9 @@ const main = async (): Promise<void> => {
         realNarrationUrl
           ? 'real-narration.json'
           : presentationEnabled
-            ? 'presentation-engine.json'
+            ? programAudioEnabled
+              ? 'program-audio-engine.json'
+              : 'presentation-engine.json'
             : hybrid
               ? 'hybrid-engine.json'
               : 'engine.json',

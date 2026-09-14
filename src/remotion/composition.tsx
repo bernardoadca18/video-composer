@@ -136,8 +136,12 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
         : null}
       {manifest.schema_version === 'render_manifest_v3' ? (
         <PresentationLayers presentation={manifest.presentation} />
+      ) : manifest.schema_version === 'render_manifest_v4' && manifest.presentation ? (
+        <PresentationLayers presentation={manifest.presentation} />
       ) : null}
-      <Audio src={manifest.narration.asset_url} />
+      {manifest.schema_version === 'render_manifest_v4' ? null : (
+        <Audio src={manifest.narration.asset_url} />
+      )}
     </AbsoluteFill>
   );
 };

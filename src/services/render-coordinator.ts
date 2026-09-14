@@ -58,6 +58,10 @@ export class RenderCoordinator {
     const renderInput = await this.orchestrator.getRenderInput(request.workflow_id);
     const timeline = renderInput.production_timeline;
     const presentation = renderInput.presentation;
+    const audioMixPlan =
+      renderInput.schema_version === 'composer_render_input_v2'
+        ? renderInput.audio_mix_plan
+        : null;
     const mediaIds = [
       ...new Set(timeline.tracks.primary_visual.placements.map((item) => item.source.media_id)),
     ];
@@ -79,6 +83,7 @@ export class RenderCoordinator {
         request.mode,
         this.config,
         presentation,
+        audioMixPlan,
       );
     } catch (error) {
       if (error instanceof ManifestValidationError) {
@@ -97,6 +102,10 @@ export class RenderCoordinator {
     if (presentation) {
       requestIdentity.presentation_fingerprint = presentation.fingerprint;
       requestIdentity.contract = 'composer_render_request_v2_presentation';
+    }
+    if (audioMixPlan) {
+      requestIdentity.audio_mix_plan_fingerprint = audioMixPlan.fingerprint;
+      requestIdentity.contract = 'composer_render_request_v3_program_audio';
     }
     const requestFingerprint = fingerprint(requestIdentity);
     if (idempotencyKey) {

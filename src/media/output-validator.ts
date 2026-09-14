@@ -17,6 +17,7 @@ export interface ValidatedOutput {
   videoCodec: string;
   audioCodec: string;
   audioSampleRate: number;
+  audioChannels: number;
 }
 
 export const validateOutput = async (
@@ -56,6 +57,8 @@ export const validateOutput = async (
   }
   if (!audio || audio.codec_name !== 'aac') mismatches.push('audio_codec');
   if (!audio || Number(audio.sample_rate) !== 48_000) mismatches.push('audio_sample_rate');
+  const expectedChannels = manifest.schema_version === 'render_manifest_v4' ? 2 : 1;
+  if (!audio || audio.channels !== expectedChannels) mismatches.push('audio_channels');
   if (duration === null || Math.abs(duration - manifest.duration_seconds) > tolerance) {
     mismatches.push(
       `duration(${duration?.toFixed(6) ?? 'missing'}!=${manifest.duration_seconds.toFixed(6)})`,
@@ -81,5 +84,6 @@ export const validateOutput = async (
     videoCodec: video.codec_name!,
     audioCodec: audio.codec_name!,
     audioSampleRate: Number(audio.sample_rate),
+    audioChannels: audio.channels!,
   };
 };

@@ -10,10 +10,12 @@ import { RenderJobProcessor } from '../../src/jobs/processor.js';
 import { RenderJobRepository } from '../../src/jobs/repository.js';
 import type { RenderWorker } from '../../src/jobs/worker.js';
 import { runProcess } from '../../src/media/process.js';
+import type { ProgramAudioProcessor } from '../../src/media/program-audio.js';
 import type { ClipProxyPreparer } from '../../src/media/proxy.js';
 import type { VideoRenderer } from '../../src/remotion/renderer.js';
 import type {
   GameplaySourceResolver,
+  MusicAssetResolver,
   NarrationAssetResolver,
 } from '../../src/services/asset-resolvers.js';
 import { RenderCoordinator } from '../../src/services/render-coordinator.js';
@@ -78,6 +80,7 @@ describe('render job safety', () => {
       {
         resolve: async () => ({ path: sourcePath, cacheHit: false, byteSize: 1, sha256: 'x' }),
       } as unknown as GameplaySourceResolver,
+      {} as MusicAssetResolver,
       {
         prepare: async (_source: string, placement: (typeof job.manifest.placements)[number]) => ({
           path: sourcePath,
@@ -94,6 +97,7 @@ describe('render job safety', () => {
         render: async (_manifest: unknown, outputPath: string) =>
           await writeFile(outputPath, 'bad'),
       } as unknown as VideoRenderer,
+      {} as ProgramAudioProcessor,
     );
 
     await processor.process(job.id);

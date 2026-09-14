@@ -85,3 +85,35 @@ export const validateStaticImage = async (ffprobe: string, filePath: string): Pr
     throw new ComposerError('image_validation_failure', 'Static image is invalid');
   }
 };
+
+export const validateMusicAsset = async (
+  ffprobe: string,
+  filePath: string,
+  expected: {
+    durationSeconds: number;
+    sampleRate: number;
+    channels: number;
+    format: 'wav' | 'flac';
+  },
+): Promise<void> => {
+  const probe = await probeMedia(ffprobe, filePath);
+  const audio = probe.streams.filter((item) => item.codec_type === 'audio');
+  const video = probe.streams.filter((item) => item.codec_type === 'video');
+  const duration = mediaDuration(probe);
+  const expectedCodec = expected.format === 'flac' ? 'flac' : 'pcm_';
+  const codecMatches =
+    expected.format === 'flac'
+      ? audio[0]?.codec_name === expectedCodec
+      : audio[0]?.codec_name?.startsWith(expectedCodec) === true;
+  if (
+    audio.length !== 1 ||
+    video.length !== 0 ||
+    !codecMatches ||
+    Number(audio[0]?.sample_rate) !== expected.sampleRate ||
+    audio[0]?.channels !== expected.channels ||
+    duration === null ||
+    Math.abs(duration - expected.durationSeconds) > 0.02
+  ) {
+    throw new ComposerError('music_asset_integrity_failed', 'Music asset media contract failed');
+  }
+};

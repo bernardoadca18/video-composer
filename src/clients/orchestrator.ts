@@ -55,6 +55,13 @@ export class OrchestratorClient {
     return await this.request(`/workflow/${workflowId}/audio`);
   }
 
+  async openMusicAsset(workflowId: string, assetId: string, sha256: string): Promise<Response> {
+    return await this.request(
+      `/workflow/${workflowId}/music-assets/${encodeURIComponent(assetId)}` +
+        `?sha256=${encodeURIComponent(sha256)}`,
+    );
+  }
+
   private async parse<T>(response: Response, schema: ZodType<T>): Promise<T> {
     try {
       return schema.parse(await response.json());

@@ -3,12 +3,15 @@ import path from 'node:path';
 
 import type { AppConfig } from '../core/config.js';
 import { ComposerError, publicError } from '../core/errors.js';
-import { validateNarration, validateStaticImage } from '../media/probe.js';
+import { validateMusicAsset, validateNarration, validateStaticImage } from '../media/probe.js';
+import type { ProgramAudioResult } from '../media/program-audio.js';
+import type { ProgramAudioProcessor } from '../media/program-audio.js';
 import { validateOutput } from '../media/output-validator.js';
 import type { ClipProxyPreparer, ProxyPlacement } from '../media/proxy.js';
 import type { VideoRenderer } from '../remotion/renderer.js';
 import type {
   GameplaySourceResolver,
+  MusicAssetResolver,
   NarrationAssetResolver,
 } from '../services/asset-resolvers.js';
 import type { RenderJobRepository } from './repository.js';
@@ -19,8 +22,10 @@ export class RenderJobProcessor {
     private readonly repository: RenderJobRepository,
     private readonly narrationResolver: NarrationAssetResolver,
     private readonly sourceResolver: GameplaySourceResolver,
+    private readonly musicResolver: MusicAssetResolver,
     private readonly proxyPreparer: ClipProxyPreparer,
     private readonly renderer: VideoRenderer,
+    private readonly programAudio: ProgramAudioProcessor,
   ) {}
 
   async process(jobId: string): Promise<void> {
@@ -29,6 +34,7 @@ export class RenderJobProcessor {
     const totalStarted = performance.now();
     const workDirectory = path.join(this.config.workRoot, job.id);
     const temporaryOutput = path.join(workDirectory, 'output.tmp.mp4');
+    const temporaryVideo = path.join(workDirectory, 'video-only.tmp.mp4');
     const finalOutput = path.join(this.config.outputRoot, `${job.id}.mp4`);
     await mkdir(workDirectory, { recursive: true });
     await mkdir(this.config.outputRoot, { recursive: true });
@@ -46,6 +52,75 @@ export class RenderJobProcessor {
         narration.path,
         job.manifest.duration_seconds,
       );
+      let programAudioResult: ProgramAudioResult | null = null;
+      let musicCacheHit: boolean | null = null;
+      if (job.manifest.schema_version === 'render_manifest_v4') {
+        console.info(
+          JSON.stringify({
+            level: 'info',
+            event: 'program_mix_started',
+            render_id: job.id,
+            audio_mix_plan_fingerprint: job.manifest.audio_mix_plan.fingerprint,
+          }),
+        );
+        let music = null;
+        if (job.manifest.audio_mix_plan.music.enabled) {
+          const asset = job.manifest.audio_mix_plan.music.asset;
+          music = await this.musicResolver.resolve(
+            job.workflowId,
+            asset.asset_id,
+            asset.sha256,
+            asset.byte_size,
+            asset.format,
+          );
+          musicCacheHit = music.cacheHit;
+          await validateMusicAsset(this.config.ffprobeBinary, music.path, {
+            durationSeconds: asset.duration_seconds,
+            sampleRate: asset.sample_rate,
+            channels: asset.channels,
+            format: asset.format,
+          });
+          console.info(
+            JSON.stringify({
+              level: 'info',
+              event: 'music_materialized',
+              render_id: job.id,
+              asset_id: asset.asset_id,
+              asset_sha256: asset.sha256,
+              cache_hit: music.cacheHit,
+            }),
+          );
+        }
+        console.info(
+          JSON.stringify({
+            level: 'info',
+            event: 'program_master_started',
+            render_id: job.id,
+            profile_id: job.manifest.audio_mix_plan.program_master.profile_id,
+          }),
+        );
+        programAudioResult = await this.programAudio.prepare(job.manifest, narration.path, music);
+        console.info(
+          JSON.stringify({
+            level: 'info',
+            event: 'program_mix_completed',
+            render_id: job.id,
+            audio_mix_plan_fingerprint: job.manifest.audio_mix_plan.fingerprint,
+            mix_sha256: programAudioResult.mixSha256,
+            master_sha256: programAudioResult.masterSha256,
+          }),
+        );
+        console.info(
+          JSON.stringify({
+            level: 'info',
+            event: 'program_master_completed',
+            render_id: job.id,
+            master_sha256: programAudioResult.masterSha256,
+            integrated_lufs: programAudioResult.after.integratedLufs,
+            true_peak_dbtp: programAudioResult.after.truePeakDbtp,
+          }),
+        );
+      }
       const sourcePaths = new Map<string, string>();
       let sourceCacheHits = 0;
       for (const asset of job.manifest.source_assets) {
@@ -80,7 +155,9 @@ export class RenderJobProcessor {
       let lastPersisted = -1;
       await this.renderer.render(
         job.manifest,
-        temporaryOutput,
+        job.manifest.schema_version === 'render_manifest_v4'
+          ? temporaryVideo
+          : temporaryOutput,
         (progress) => {
           const percent = Math.floor(progress.progress * 100);
           if (percent >= lastPersisted + 2 || percent === 100) {
@@ -95,6 +172,17 @@ export class RenderJobProcessor {
         },
         { renderId: job.id },
       );
+      if (job.manifest.schema_version === 'render_manifest_v4') {
+        if (!programAudioResult) {
+          throw new ComposerError('program_mix_failed', 'Program master is unavailable');
+        }
+        await this.programAudio.mux(
+          temporaryVideo,
+          programAudioResult.path,
+          temporaryOutput,
+          job.manifest.audio_mix_plan,
+        );
+      }
       const renderSeconds = (performance.now() - renderStarted) / 1000;
       this.repository.updateProgress(job.id, 'validating', 0.92, job.totalFrames);
       const validationStarted = performance.now();
@@ -119,6 +207,36 @@ export class RenderJobProcessor {
           proxyCount: uniqueProxies.size,
           remotionVersion: '4.0.516',
           composerStrategyVersion: job.manifest.composer_strategy_version,
+          ...(job.manifest.schema_version === 'render_manifest_v4' && programAudioResult
+            ? {
+                programAudio: {
+                  audioMixPlanFingerprint: job.manifest.audio_mix_plan.fingerprint,
+                  musicAssetId: job.manifest.audio_mix_plan.music.enabled
+                    ? job.manifest.audio_mix_plan.music.asset.asset_id
+                    : null,
+                  musicSha256: job.manifest.audio_mix_plan.music.enabled
+                    ? job.manifest.audio_mix_plan.music.asset.sha256
+                    : null,
+                  musicCacheHit,
+                  normalizedMusicCacheHit: programAudioResult.normalizedMusicCacheHit,
+                  mixCacheHit: programAudioResult.mixCacheHit,
+                  masterCacheHit: programAudioResult.masterCacheHit,
+                  mixSha256: programAudioResult.mixSha256,
+                  masterSha256: programAudioResult.masterSha256,
+                  before: programAudioResult.before,
+                  after: programAudioResult.after,
+                  toolIdentity: programAudioResult.toolIdentity,
+                  outputChannels: 2,
+                  outputSampleRate: 48000,
+                  targetLufs: job.manifest.audio_mix_plan.program_master.target_lufs,
+                  maxTruePeakDbtp:
+                    job.manifest.audio_mix_plan.program_master.max_true_peak_dbtp,
+                  targetLra: job.manifest.audio_mix_plan.program_master.target_lra,
+                  programMasterProfile:
+                    job.manifest.audio_mix_plan.program_master.profile_id,
+                },
+              }
+            : {}),
         },
       );
       console.info(
@@ -136,6 +254,7 @@ export class RenderJobProcessor {
       );
     } catch (error) {
       await unlink(temporaryOutput).catch(() => undefined);
+      await unlink(temporaryVideo).catch(() => undefined);
       await unlink(finalOutput).catch(() => undefined);
       const safe = publicError(error);
       this.repository.fail(job.id, safe.category, safe.message);

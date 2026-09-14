@@ -40,8 +40,13 @@ const jobResponse = (job: RenderJob): Record<string, unknown> => ({
   render_fingerprint: job.renderFingerprint,
   manifest_fingerprint: job.manifestFingerprint,
   presentation_fingerprint:
-    job.manifest.schema_version === 'render_manifest_v3'
-      ? job.manifest.presentation.fingerprint
+    job.manifest.schema_version === 'render_manifest_v3' ||
+    job.manifest.schema_version === 'render_manifest_v4'
+      ? (job.manifest.presentation?.fingerprint ?? null)
+      : null,
+  audio_mix_plan_fingerprint:
+    job.manifest.schema_version === 'render_manifest_v4'
+      ? job.manifest.audio_mix_plan.fingerprint
       : null,
   created_at: job.createdAt,
   started_at: job.startedAt,
@@ -78,6 +83,7 @@ export const buildServer = (context: ServerContext): FastifyInstance => {
       video_codec: profile.videoCodec,
       audio_codec: profile.audioCodec,
       audio_sample_rate: profile.audioSampleRate,
+      audio_channels: profile.audioChannels,
       fit_mode: profile.fitMode,
       final_gap_policy: profile.finalGapPolicy,
       preview_gap_policy: profile.previewGapPolicy,

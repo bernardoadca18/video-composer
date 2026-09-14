@@ -12,6 +12,23 @@ and outputs under the configured data root. Publish outputs atomically and fail 
 
 Stage 17 end-to-end orchestration is not part of this repository yet.
 
+# Program Audio V1 rules
+
+- The Orchestrator alone resolves `audio_intent`. Execute `audio_mix_plan_v1`; never select music.
+- Program renders use `composer_render_input_v2`, `render_manifest_v4`,
+  `video_composer_v4_program_audio`, and the explicit stereo program profile. With no plan,
+  preserve V1/V2/V3 and historical mono semantics exactly.
+- Materialize music only from the controlled Orchestrator endpoint and verify SHA, size, format,
+  duration, sample rate, and channels. Never accept an upstream path, URL, filtergraph, or shell
+  fragment.
+- Keep source gameplay proxies silent. Program Audio V1 contains narration plus one controlled
+  instrumental music track only; SFX remains out of scope.
+- Keep narration mastering and program mastering semantically separate. Use lossless PCM caches,
+  render V4 video-only, and perform at most one final AAC encode.
+- Cache keys include all audible plan decisions and FFmpeg identity; validate sidecars and rebuild
+  corrupt entries atomically. Program-audio failures must not mutate upstream narration.
+- Candidate mix/master settings require human review and must not be called human-frozen.
+
 # Deterministic presentation rules
 
 - Read the versioned Composer render-input package; do not fetch transcription/script fragments.

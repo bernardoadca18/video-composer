@@ -1,8 +1,8 @@
 import { fingerprint } from '../core/identity.js';
 
 export interface RenderProfile {
-  name: 'youtube_1080p30_v1';
-  version: 'render_profile_v1';
+  name: 'youtube_1080p30_v1' | 'youtube_1080p30_program_audio_v1';
+  version: 'render_profile_v1' | 'render_profile_program_audio_v1';
   identity: string;
   width: 1920;
   height: 1080;
@@ -14,6 +14,7 @@ export interface RenderProfile {
   audioCodec: 'aac';
   audioBitrate: '192k';
   audioSampleRate: 48000;
+  audioChannels: 1 | 2;
   fitMode: 'contain';
   backgroundColor: '#000000';
   finalGapPolicy: 'reject';
@@ -33,6 +34,7 @@ const profileWithoutIdentity = {
   audioCodec: 'aac',
   audioBitrate: '192k',
   audioSampleRate: 48000,
+  audioChannels: 1,
   fitMode: 'contain',
   backgroundColor: '#000000',
   finalGapPolicy: 'reject',
@@ -44,8 +46,21 @@ export const youtube1080p30V1: RenderProfile = {
   identity: fingerprint(profileWithoutIdentity),
 };
 
+const programAudioProfileWithoutIdentity = {
+  ...profileWithoutIdentity,
+  name: 'youtube_1080p30_program_audio_v1',
+  version: 'render_profile_program_audio_v1',
+  audioChannels: 2,
+} as const;
+
+export const youtube1080p30ProgramAudioV1: RenderProfile = {
+  ...programAudioProfileWithoutIdentity,
+  identity: fingerprint(programAudioProfileWithoutIdentity),
+};
+
 export const renderProfiles = new Map<string, RenderProfile>([
   [youtube1080p30V1.name, youtube1080p30V1],
+  [youtube1080p30ProgramAudioV1.name, youtube1080p30ProgramAudioV1],
 ]);
 
 export class UnknownRenderProfileError extends Error {}

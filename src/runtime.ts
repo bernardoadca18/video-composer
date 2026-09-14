@@ -8,9 +8,14 @@ import { RenderJobProcessor } from './jobs/processor.js';
 import { RenderJobRepository } from './jobs/repository.js';
 import { RenderWorker } from './jobs/worker.js';
 import { ClipProxyPreparer } from './media/proxy.js';
+import { ProgramAudioProcessor } from './media/program-audio.js';
 import { runProcess } from './media/process.js';
 import { RemotionVideoRenderer } from './remotion/renderer.js';
-import { GameplaySourceResolver, NarrationAssetResolver } from './services/asset-resolvers.js';
+import {
+  GameplaySourceResolver,
+  MusicAssetResolver,
+  NarrationAssetResolver,
+} from './services/asset-resolvers.js';
 import { RenderCoordinator } from './services/render-coordinator.js';
 
 export const startRuntime = async (config: AppConfig): Promise<void> => {
@@ -19,6 +24,8 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
       config.sourceCacheRoot,
       config.proxyCacheRoot,
       config.narrationCacheRoot,
+      config.musicCacheRoot,
+      config.programAudioCacheRoot,
       config.workRoot,
       config.outputRoot,
     ].map(async (directory) => await mkdir(directory, { recursive: true })),
@@ -37,8 +44,10 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
     repository,
     new NarrationAssetResolver(config.narrationCacheRoot, orchestrator),
     new GameplaySourceResolver(config.sourceCacheRoot, mediaIndexer),
+    new MusicAssetResolver(config.musicCacheRoot, orchestrator),
     new ClipProxyPreparer(config),
     renderer,
+    new ProgramAudioProcessor(config),
   );
   const worker = new RenderWorker(processor, config.maxQueueSize, config.renderWorkerConcurrency);
   const coordinator = new RenderCoordinator(config, repository, worker, orchestrator, mediaIndexer);

@@ -18,6 +18,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "smoke:render": "tsx scripts/smoke-render.ts",
+    "smoke:program-audio": "SMOKE_PROGRAM_AUDIO=1 tsx scripts/smoke-render.ts",
     "benchmark": "tsx scripts/benchmark-render.ts",
     "benchmark:resources": "tsx scripts/benchmark-resources.ts",
     "extract:frames": "tsx scripts/extract-frames.ts",

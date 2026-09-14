@@ -3,16 +3,20 @@ import { fingerprint } from '../core/identity.js';
 import type { RenderProfile } from './profiles.js';
 import {
   type MediaAssetMetadata,
+  type AudioMixPlan,
   type PresentationSpec,
   type ProductionTimeline,
   type RenderManifest,
   type RenderManifestV1,
   type RenderManifestV2,
   type RenderManifestV3,
+  type RenderManifestV4,
+  AudioMixPlanSchema,
   PresentationSpecSchema,
   RenderManifestV1Schema,
   RenderManifestV2Schema,
   RenderManifestV3Schema,
+  RenderManifestV4Schema,
 } from './contracts.js';
 import { quantizeBoundaries, secondsToMicroseconds } from './quantization.js';
 
@@ -534,6 +538,15 @@ export function buildRenderManifest(
   profile: RenderProfile,
   mode: 'preview' | 'final',
   config: AppConfig,
+  presentation: PresentationSpec | null,
+  audioMixPlan: AudioMixPlan,
+): { manifest: RenderManifestV4; manifestFingerprint: string; renderFingerprint: string };
+export function buildRenderManifest(
+  timeline: ProductionTimeline,
+  metadata: ReadonlyMap<string, MediaAssetMetadata>,
+  profile: RenderProfile,
+  mode: 'preview' | 'final',
+  config: AppConfig,
   presentation: PresentationSpec,
 ): { manifest: RenderManifestV3; manifestFingerprint: string; renderFingerprint: string };
 export function buildRenderManifest(
@@ -557,6 +570,7 @@ export function buildRenderManifest(
   mode: 'preview' | 'final',
   config: AppConfig,
   presentation?: PresentationSpec | null,
+  audioMixPlan?: AudioMixPlan | null,
 ): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string };
 export function buildRenderManifest(
   timeline: ProductionTimeline,
@@ -565,12 +579,69 @@ export function buildRenderManifest(
   mode: 'preview' | 'final',
   config: AppConfig,
   presentation?: PresentationSpec | null,
+  audioMixPlan?: AudioMixPlan | null,
 ): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string } {
+  if (audioMixPlan && profile.name !== 'youtube_1080p30_program_audio_v1') {
+    throw new ManifestValidationError(
+      'invalid_profile',
+      'AudioMixPlan requires the Program Audio render profile',
+    );
+  }
+  if (!audioMixPlan && profile.name === 'youtube_1080p30_program_audio_v1') {
+    throw new ManifestValidationError(
+      'audio_mix_plan_invalid',
+      'Program Audio render profile requires AudioMixPlan',
+    );
+  }
+  let parsedAudioMixPlan: AudioMixPlan | null = null;
+  if (audioMixPlan) {
+    parsedAudioMixPlan = AudioMixPlanSchema.parse(audioMixPlan);
+    const { fingerprint: declaredAudioFingerprint, ...audioContent } = parsedAudioMixPlan;
+    if (fingerprint(audioContent) !== declaredAudioFingerprint) {
+      throw new ManifestValidationError(
+        'audio_mix_plan_identity',
+        'AudioMixPlan fingerprint does not match its canonical content',
+      );
+    }
+    if (
+      parsedAudioMixPlan.narration.sha256 !== timeline.tracks.narration?.audio_sha256 ||
+      Math.abs(parsedAudioMixPlan.duration_seconds - timeline.duration_seconds) > 0.001
+    ) {
+      throw new ManifestValidationError(
+        'audio_mix_plan_invalid',
+        'AudioMixPlan does not match the ProductionTimeline narration',
+      );
+    }
+  }
   const legacy =
     timeline.schema_version === 'production_timeline_schema_v2'
       ? buildRenderManifestV2(timeline, metadata, profile, mode, config)
       : buildRenderManifestV1(timeline, metadata, profile, mode, config);
-  if (!presentation) return legacy;
+  if (!presentation) {
+    if (parsedAudioMixPlan) {
+      const programManifest = RenderManifestV4Schema.parse({
+        ...legacy.manifest,
+        schema_version: 'render_manifest_v4',
+        composer_strategy_version: 'video_composer_v4_program_audio',
+        source_timeline_schema_version: timeline.schema_version,
+        presentation: null,
+        audio_mix_plan: parsedAudioMixPlan,
+      });
+      const programManifestFingerprint = fingerprint(programManifest);
+      return {
+        manifest: programManifest,
+        manifestFingerprint: programManifestFingerprint,
+        renderFingerprint: fingerprint({
+          manifest_fingerprint: programManifestFingerprint,
+          composer_strategy_version: 'video_composer_v4_program_audio',
+          remotion_version: '4.0.516',
+          render_profile_identity: profile.identity,
+          mode,
+        }),
+      };
+    }
+    return legacy;
+  }
 
   const parsedPresentation = PresentationSpecSchema.parse(presentation);
   const { fingerprint: declaredFingerprint, ...presentationContent } = parsedPresentation;
@@ -671,6 +742,26 @@ export function buildRenderManifest(
     source_timeline_schema_version: timeline.schema_version,
     presentation: presentationFrames,
   });
+  if (parsedAudioMixPlan) {
+    const programManifest = RenderManifestV4Schema.parse({
+      ...manifest,
+      schema_version: 'render_manifest_v4',
+      composer_strategy_version: 'video_composer_v4_program_audio',
+      audio_mix_plan: parsedAudioMixPlan,
+    });
+    const programManifestFingerprint = fingerprint(programManifest);
+    return {
+      manifest: programManifest,
+      manifestFingerprint: programManifestFingerprint,
+      renderFingerprint: fingerprint({
+        manifest_fingerprint: programManifestFingerprint,
+        composer_strategy_version: 'video_composer_v4_program_audio',
+        remotion_version: '4.0.516',
+        render_profile_identity: profile.identity,
+        mode,
+      }),
+    };
+  }
   const manifestFingerprint = fingerprint(manifest);
   return {
     manifest,

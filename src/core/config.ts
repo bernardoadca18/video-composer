@@ -32,6 +32,8 @@ export interface AppConfig {
   sourceCacheRoot: string;
   proxyCacheRoot: string;
   narrationCacheRoot: string;
+  musicCacheRoot: string;
+  programAudioCacheRoot: string;
   workRoot: string;
   outputRoot: string;
   orchestratorBaseUrl: string;
@@ -63,6 +65,8 @@ export const loadConfig = (environment: NodeJS.ProcessEnv = process.env): AppCon
     sourceCacheRoot: path.join(dataRoot, 'cache', 'source'),
     proxyCacheRoot: path.join(dataRoot, 'cache', 'proxies'),
     narrationCacheRoot: path.join(dataRoot, 'cache', 'narration'),
+    musicCacheRoot: path.join(dataRoot, 'cache', 'music'),
+    programAudioCacheRoot: path.join(dataRoot, 'cache', 'program-audio'),
     workRoot: path.join(dataRoot, 'work'),
     outputRoot: path.join(dataRoot, 'outputs'),
     orchestratorBaseUrl: value.ORCHESTRATOR_BASE_URL.replace(/\/$/, ''),

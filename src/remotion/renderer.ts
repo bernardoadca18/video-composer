@@ -83,7 +83,7 @@ export class RemotionVideoRenderer implements VideoRenderer {
         composition,
         inputProps: manifest,
         codec: 'h264',
-        audioCodec: 'aac',
+        audioCodec: manifest.schema_version === 'render_manifest_v4' ? null : 'aac',
         audioBitrate: '192k',
         sampleRate: 48000,
         crf: 18,
@@ -93,7 +93,8 @@ export class RemotionVideoRenderer implements VideoRenderer {
         colorSpace: 'bt709',
         outputLocation: outputPath,
         overwrite: true,
-        enforceAudioTrack: true,
+        enforceAudioTrack: manifest.schema_version !== 'render_manifest_v4',
+        muted: manifest.schema_version === 'render_manifest_v4',
         concurrency: this.config.remotionConcurrency,
         logLevel: 'warn',
         ffmpegOverride: ({ type, args }) => {

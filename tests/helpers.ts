@@ -26,6 +26,8 @@ export const testConfig = (root: string): AppConfig => ({
   sourceCacheRoot: path.join(root, 'cache', 'source'),
   proxyCacheRoot: path.join(root, 'cache', 'proxies'),
   narrationCacheRoot: path.join(root, 'cache', 'narration'),
+  musicCacheRoot: path.join(root, 'cache', 'music'),
+  programAudioCacheRoot: path.join(root, 'cache', 'program-audio'),
   workRoot: path.join(root, 'work'),
   outputRoot: path.join(root, 'outputs'),
   orchestratorBaseUrl: 'http://orchestrator.test',

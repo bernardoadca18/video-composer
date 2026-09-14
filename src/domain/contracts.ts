@@ -261,13 +261,191 @@ export const PresentationSpecSchema = z
     }
   });
 
-export const ComposerRenderInputSchema = z
+export const ProgramMusicAssetSchema = z
+  .object({
+    asset_id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,95}$/),
+    sha256: Sha256,
+    byte_size: z.number().int().positive(),
+    content_type: z.enum(['audio/wav', 'audio/flac']),
+    format: z.enum(['wav', 'flac']),
+    duration_seconds: z.number().finite().positive(),
+    sample_rate: z.number().int().min(8_000).max(192_000),
+    channels: z.number().int().min(1).max(2),
+    integrated_lufs: z.number().finite().min(-70).max(0),
+    true_peak_dbtp: z.number().finite().min(-70).max(3),
+    moods: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).max(32),
+    styles: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).max(32),
+    energy: z.number().finite().min(0).max(1),
+    vocals: z.literal(false),
+    loopable: z.boolean(),
+    source_owner: z.string().min(1).max(200),
+    source_reference: z.string().min(1).max(500),
+    license_type: z.enum(['owned', 'commissioned', 'cc0', 'royalty_free']),
+    monetization_allowed: z.literal(true),
+    attribution_required: z.boolean(),
+    attribution_text: z.string().max(1000).nullable(),
+  })
+  .strict()
+  .refine(
+    (value) => !value.attribution_required || Boolean(value.attribution_text?.trim()),
+    'Attribution text is required',
+  );
+
+const ProgramMusicSegmentSchema = z
+  .object({
+    start_seconds: Seconds,
+    end_seconds: z.number().finite().positive(),
+    gain_adjustment_db: z.number().finite().min(-3).max(3),
+    fade_in_seconds: z.number().finite().min(0).max(2),
+    fade_out_seconds: z.number().finite().min(0).max(2),
+    transition_preset: z.enum(['none_v1', 'smooth_v1']),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.end_seconds > value.start_seconds &&
+      value.fade_in_seconds + value.fade_out_seconds <= value.end_seconds - value.start_seconds,
+    'Invalid music segment',
+  );
+
+const ProgramMusicSchema = z.discriminatedUnion('enabled', [
+  z.object({ enabled: z.literal(false) }).strict(),
+  z
+    .object({
+      enabled: z.literal(true),
+      asset: ProgramMusicAssetSchema,
+      source_start_seconds: z.literal(0),
+      source_end_seconds: z.number().finite().positive(),
+      loop_policy: z.enum(['no_loop_v1', 'repeat_from_start_v1']),
+      normalization_policy: z.literal('music_loudnorm_v1'),
+      normalization_target_lufs: z.number().finite().min(-30).max(-16),
+      segments: z.array(ProgramMusicSegmentSchema).min(1).max(512),
+    })
+    .strict(),
+]);
+
+const SpeechRegionSchema = z
+  .object({ start_seconds: Seconds, end_seconds: z.number().finite().positive() })
+  .strict()
+  .refine((value) => value.end_seconds > value.start_seconds, 'Invalid speech region');
+
+export const AudioMixPlanSchema = z
+  .object({
+    schema_version: z.literal('audio_mix_plan_v1'),
+    strategy_version: z.literal('longform_program_audio_v1'),
+    profile_id: z.literal('music_mix_profile_v1_candidate'),
+    duration_seconds: z.number().finite().positive(),
+    narration: z
+      .object({
+        sha256: Sha256,
+        duration_seconds: z.number().finite().positive(),
+        sample_rate: z.literal(48_000),
+        channels: z.literal(1),
+      })
+      .strict(),
+    music: ProgramMusicSchema,
+    ducking: z
+      .object({
+        policy_version: z.literal('speech_envelope_v1'),
+        base_gain_db: z.number().finite().min(-24).max(0),
+        ducked_gain_db: z.number().finite().min(-36).max(-6),
+        attack_seconds: z.number().finite().positive().max(2),
+        release_seconds: z.number().finite().positive().max(3),
+        merge_gap_seconds: z.number().finite().min(0).max(2),
+        speech_regions: z.array(SpeechRegionSchema).max(512),
+      })
+      .strict(),
+    program_master: z
+      .object({
+        profile_id: z.literal('youtube_program_master_v1_candidate'),
+        policy_version: z.literal('ffmpeg_loudnorm_two_pass_v1'),
+        target_lufs: z.number().finite().min(-24).max(-10),
+        max_true_peak_dbtp: z.number().finite().min(-3).max(-0.1),
+        target_lra: z.number().finite().min(1).max(20),
+      })
+      .strict(),
+    output: z
+      .object({
+        profile_id: z.literal('youtube_1080p30_program_audio_v1'),
+        codec: z.literal('aac'),
+        bitrate: z.literal('192k'),
+        sample_rate: z.literal(48_000),
+        channels: z.literal(2),
+      })
+      .strict(),
+    fingerprint: Sha256,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.ducking.ducked_gain_db >= value.ducking.base_gain_db) {
+      context.addIssue({ code: 'custom', message: 'Ducked gain must be below base gain' });
+    }
+    if (Math.abs(value.duration_seconds - value.narration.duration_seconds) > 0.01) {
+      context.addIssue({ code: 'custom', message: 'Narration duration mismatch' });
+    }
+    value.ducking.speech_regions.forEach((item, index) => {
+      if (
+        item.end_seconds > value.duration_seconds ||
+        (index > 0 && item.start_seconds < value.ducking.speech_regions[index - 1]!.end_seconds)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Speech regions are outside the timeline or overlap',
+          path: ['ducking', 'speech_regions', index],
+        });
+      }
+    });
+    if (value.music.enabled) {
+      const music = value.music;
+      if (Math.abs(music.source_end_seconds - music.asset.duration_seconds) > 0.001) {
+        context.addIssue({ code: 'custom', message: 'Music source duration mismatch' });
+      }
+      if (music.loop_policy === 'repeat_from_start_v1' && !music.asset.loopable) {
+        context.addIssue({ code: 'custom', message: 'Music asset is not loopable' });
+      }
+      music.segments.forEach((item, index) => {
+        if (
+          item.end_seconds > value.duration_seconds ||
+          (index > 0 && item.start_seconds < music.segments[index - 1]!.end_seconds)
+        ) {
+          context.addIssue({
+            code: 'custom',
+            message: 'Music segments are outside the timeline or overlap',
+            path: ['music', 'segments', index],
+          });
+        }
+      });
+      const requiredEnd = Math.max(...music.segments.map((item) => item.end_seconds));
+      if (
+        music.loop_policy === 'no_loop_v1' &&
+        requiredEnd > music.asset.duration_seconds + 0.001
+      ) {
+        context.addIssue({ code: 'custom', message: 'Non-looping music cannot cover the plan' });
+      }
+    }
+  });
+
+export const ComposerRenderInputV1Schema = z
   .object({
     schema_version: z.literal('composer_render_input_v1'),
     production_timeline: ProductionTimelineSchema,
     presentation: PresentationSpecSchema.nullable(),
   })
   .strict();
+
+export const ComposerRenderInputV2Schema = z
+  .object({
+    schema_version: z.literal('composer_render_input_v2'),
+    production_timeline: ProductionTimelineSchema,
+    presentation: PresentationSpecSchema.nullable(),
+    audio_mix_plan: AudioMixPlanSchema,
+  })
+  .strict();
+
+export const ComposerRenderInputSchema = z.union([
+  ComposerRenderInputV1Schema,
+  ComposerRenderInputV2Schema,
+]);
 
 const RenderPresentationSchema = z
   .object({
@@ -350,9 +528,10 @@ export type MediaAssetMetadata = z.infer<typeof MediaAssetMetadataSchema>;
 export type RenderRequest = z.infer<typeof RenderRequestSchema>;
 export type PresentationSpec = z.infer<typeof PresentationSpecSchema>;
 export type ComposerRenderInput = z.infer<typeof ComposerRenderInputSchema>;
+export type AudioMixPlan = z.infer<typeof AudioMixPlanSchema>;
 
 const RenderProfileSchema = z.object({
-  name: z.literal('youtube_1080p30_v1'),
+  name: z.enum(['youtube_1080p30_v1', 'youtube_1080p30_program_audio_v1']),
   identity: Sha256,
   width: z.number().int().positive(),
   height: z.number().int().positive(),
@@ -593,12 +772,24 @@ export const RenderManifestV3Schema = z
     });
   });
 
+export const RenderManifestV4Schema = z
+  .object({
+    ...RenderManifestV3Schema.shape,
+    schema_version: z.literal('render_manifest_v4'),
+    composer_strategy_version: z.literal('video_composer_v4_program_audio'),
+    presentation: RenderPresentationSchema.nullable(),
+    audio_mix_plan: AudioMixPlanSchema,
+  })
+  .strict();
+
 export const RenderManifestSchema = z.union([
   RenderManifestV1Schema,
   RenderManifestV2Schema,
   RenderManifestV3Schema,
+  RenderManifestV4Schema,
 ]);
 export type RenderManifest = z.infer<typeof RenderManifestSchema>;
 export type RenderManifestV1 = z.infer<typeof RenderManifestV1Schema>;
 export type RenderManifestV2 = z.infer<typeof RenderManifestV2Schema>;
 export type RenderManifestV3 = z.infer<typeof RenderManifestV3Schema>;
+export type RenderManifestV4 = z.infer<typeof RenderManifestV4Schema>;

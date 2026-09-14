@@ -155,9 +155,7 @@ export class RenderJobProcessor {
       let lastPersisted = -1;
       await this.renderer.render(
         job.manifest,
-        job.manifest.schema_version === 'render_manifest_v4'
-          ? temporaryVideo
-          : temporaryOutput,
+        temporaryVideo,
         (progress) => {
           const percent = Math.floor(progress.progress * 100);
           if (percent >= lastPersisted + 2 || percent === 100) {
@@ -181,6 +179,13 @@ export class RenderJobProcessor {
           programAudioResult.path,
           temporaryOutput,
           job.manifest.audio_mix_plan,
+        );
+      } else {
+        await this.programAudio.muxNarration(
+          temporaryVideo,
+          narration.path,
+          temporaryOutput,
+          job.manifest.duration_seconds,
         );
       }
       const renderSeconds = (performance.now() - renderStarted) / 1000;
@@ -229,11 +234,9 @@ export class RenderJobProcessor {
                   outputChannels: 2,
                   outputSampleRate: 48000,
                   targetLufs: job.manifest.audio_mix_plan.program_master.target_lufs,
-                  maxTruePeakDbtp:
-                    job.manifest.audio_mix_plan.program_master.max_true_peak_dbtp,
+                  maxTruePeakDbtp: job.manifest.audio_mix_plan.program_master.max_true_peak_dbtp,
                   targetLra: job.manifest.audio_mix_plan.program_master.target_lra,
-                  programMasterProfile:
-                    job.manifest.audio_mix_plan.program_master.profile_id,
+                  programMasterProfile: job.manifest.audio_mix_plan.program_master.profile_id,
                 },
               }
             : {}),

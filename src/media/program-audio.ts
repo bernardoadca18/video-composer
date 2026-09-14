@@ -349,9 +349,7 @@ export class ProgramAudioProcessor {
     const mixKey = fingerprint({
       narration_sha256: plan.narration.sha256,
       audio_mix_plan_fingerprint: plan.fingerprint,
-      normalized_music_sha256: normalizedMusicPath
-        ? await sha256File(normalizedMusicPath)
-        : null,
+      normalized_music_sha256: normalizedMusicPath ? await sha256File(normalizedMusicPath) : null,
       mix_policy: 'program_mix_pcm_v1',
       tool_identity: toolIdentity,
     });
@@ -442,7 +440,37 @@ export class ProgramAudioProcessor {
     };
   }
 
-  async mux(videoPath: string, audioPath: string, outputPath: string, plan: AudioMixPlan): Promise<void> {
+  async mux(
+    videoPath: string,
+    audioPath: string,
+    outputPath: string,
+    plan: AudioMixPlan,
+  ): Promise<void> {
+    await this.muxPcm(
+      videoPath,
+      audioPath,
+      outputPath,
+      plan.duration_seconds,
+      plan.output.channels,
+    );
+  }
+
+  async muxNarration(
+    videoPath: string,
+    narrationPath: string,
+    outputPath: string,
+    durationSeconds: number,
+  ): Promise<void> {
+    await this.muxPcm(videoPath, narrationPath, outputPath, durationSeconds, 1);
+  }
+
+  private async muxPcm(
+    videoPath: string,
+    audioPath: string,
+    outputPath: string,
+    durationSeconds: number,
+    channels: 1 | 2,
+  ): Promise<void> {
     await runProcess(
       this.config.ffmpegBinary,
       [
@@ -462,13 +490,13 @@ export class ProgramAudioProcessor {
         '-c:a',
         'aac',
         '-b:a',
-        plan.output.bitrate,
+        '192k',
         '-ar',
-        String(plan.output.sample_rate),
+        '48000',
         '-ac',
-        String(plan.output.channels),
+        String(channels),
         '-t',
-        n(plan.duration_seconds),
+        n(durationSeconds),
         '-movflags',
         '+faststart',
         outputPath,

@@ -59,9 +59,7 @@ export class RenderCoordinator {
     const timeline = renderInput.production_timeline;
     const presentation = renderInput.presentation;
     const audioMixPlan =
-      renderInput.schema_version === 'composer_render_input_v2'
-        ? renderInput.audio_mix_plan
-        : null;
+      renderInput.schema_version === 'composer_render_input_v2' ? renderInput.audio_mix_plan : null;
     const mediaIds = [
       ...new Set(timeline.tracks.primary_visual.placements.map((item) => item.source.media_id)),
     ];

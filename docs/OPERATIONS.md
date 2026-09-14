@@ -14,6 +14,9 @@ job/fingerprint is requeued.
 
 - `data/cache/source`: content-addressed Media Indexer downloads;
 - `data/cache/narration`: checksum-validated WAVs;
+- `data/cache/music`: checksum-validated controlled WAV/FLAC sources;
+- `data/cache/program-audio`: normalized music, pre-master mix, and mastered 48 kHz stereo PCM,
+  each protected by SHA/size sidecars and locks;
 - `data/cache/proxies`: exact-trim, 30 fps, silent H.264 proxies;
 - `data/work`: per-render temporary data;
 - `data/outputs`: validated public MP4 files;
@@ -31,6 +34,11 @@ workflow, phase, frame progress and timings. No provider call has hidden retries
 
 Cancellation is deliberately deferred until Remotion process termination can be guaranteed without
 leaking Chromium children. Queue overload returns HTTP 429.
+
+Program Audio keeps invalid plan, unavailable/integrity-failed music, mix, master, and output
+validation failures distinct. Remotion renders video-only; final mux copies H.264 and performs the
+only AAC encode from lossless PCM. Corrupt derivatives are rebuilt atomically. Structured events
+carry render/asset/plan identities and pre/post master measurements without host paths.
 
 ## Container render smoke
 
@@ -83,3 +91,15 @@ Indexer corpus ingestion is active, leave this command pending. After ingestion,
 data/smoke/presentation-engine-render.mp4 and the adjacent JSON report, including H.264, 1920x1080,
 30 fps, yuv420p, one AAC 48 kHz stream, expected duration/frame count, sampled overlay frames,
 second-run cache reuse, and stable fingerprints.
+
+## Program Audio smoke and A/B review
+
+```bash
+SMOKE_HYBRID=1 SMOKE_PRESENTATION=1 SMOKE_PROGRAM_AUDIO=1 npm run smoke:render
+```
+
+The generated synthetic smoke verifies V4, H.264/yuv420p, one AAC 48 kHz stereo stream, silent
+gameplay proxies, music presence, measured ducking, fades, program LUFS/True Peak, presentation,
+stable identities, and cache reuse in a second job. Review artifacts are under
+`data/smoke/program-audio-review`: narration only, pre-master mix, final PCM master, and a manifest
+with SHAs/policies/measurements. Candidate gain and mastering values are not human-frozen.

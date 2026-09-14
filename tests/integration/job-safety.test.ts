@@ -97,7 +97,10 @@ describe('render job safety', () => {
         render: async (_manifest: unknown, outputPath: string) =>
           await writeFile(outputPath, 'bad'),
       } as unknown as VideoRenderer,
-      {} as ProgramAudioProcessor,
+      {
+        muxNarration: async (_videoPath: string, _narrationPath: string, outputPath: string) =>
+          await writeFile(outputPath, 'bad'),
+      } as unknown as ProgramAudioProcessor,
     );
 
     await processor.process(job.id);

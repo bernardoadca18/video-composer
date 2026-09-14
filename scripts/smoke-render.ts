@@ -607,9 +607,7 @@ const main = async (): Promise<void> => {
   const upstream = Fastify({ logger: false });
   upstream.get(`/workflow/${WORKFLOW_ID}/production-timeline`, async () => timeline);
   upstream.get(`/workflow/${WORKFLOW_ID}/composer-render-input`, async () => ({
-    schema_version: programAudioEnabled
-      ? 'composer_render_input_v2'
-      : 'composer_render_input_v1',
+    schema_version: programAudioEnabled ? 'composer_render_input_v2' : 'composer_render_input_v1',
     production_timeline: timeline,
     presentation,
     ...(audioMixPlan ? { audio_mix_plan: audioMixPlan } : {}),

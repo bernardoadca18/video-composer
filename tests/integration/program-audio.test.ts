@@ -54,7 +54,7 @@ describe('Program Audio FFmpeg execution', () => {
         '-f',
         'lavfi',
         '-i',
-        "aevalsrc=if(between(t\\,0.5\\,2)+between(t\\,4\\,5)\\,0.18*sin(2*PI*440*t)\\,0):s=48000:d=6",
+        'aevalsrc=if(between(t\\,0.5\\,2)+between(t\\,4\\,5)\\,0.18*sin(2*PI*440*t)\\,0):s=48000:d=6',
         '-ac',
         '1',
         '-c:a',

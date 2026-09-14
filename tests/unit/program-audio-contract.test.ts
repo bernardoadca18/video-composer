@@ -145,9 +145,7 @@ describe('AudioMixPlan V1 contract', () => {
       ...base,
       music: {
         ...base.music,
-        segments: base.music.enabled
-          ? [{ ...base.music.segments[0]!, gain_adjustment_db: 1 }]
-          : [],
+        segments: base.music.enabled ? [{ ...base.music.segments[0]!, gain_adjustment_db: 1 }] : [],
       },
     };
     const { fingerprint: ignored, ...changedWithoutFingerprint } = changedGainContent;

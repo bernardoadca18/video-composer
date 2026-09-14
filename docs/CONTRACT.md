@@ -3,9 +3,10 @@
 ## Accepted upstream artifact
 
 The service reads the coherent internal package
-GET /workflow/{workflow_id}/composer-render-input. The package contains a frozen
-ProductionTimeline plus an optional PresentationSpec. The legacy timeline endpoint remains an
-Orchestrator API, but the Composer does not assemble presentation by making independent reads.
+GET /workflow/{workflow_id}/composer-render-input. `composer_render_input_v1` contains a frozen
+ProductionTimeline plus an optional PresentationSpec. `composer_render_input_v2` additionally
+contains the required fingerprinted AudioMixPlan V1. The legacy timeline endpoint remains an
+Orchestrator API, but the Composer does not assemble presentation or audio by independent reads.
 
 The Composer supports:
 
@@ -39,12 +40,24 @@ fingerprint, and quantizes every overlay boundary to frames before rendering. Ca
 branding, or transition changes therefore change manifest and render identity. A missing
 PresentationSpec follows the original V1/V2 code path and identity unchanged.
 
+`render_manifest_v4` (`video_composer_v4_program_audio`) is emitted only with a valid
+`audio_mix_plan_v1`. It retains V1/V2 visual source semantics and optional presentation, while
+freezing immutable music identity/licensing metadata, ranges, closed fade/loop presets, bounded
+speech envelope, candidate program-master policy, and stereo output. Plan duration and narration
+SHA must match the ProductionTimeline. No path, external URL, or executable filter expression is
+accepted. Any audible plan change changes manifest and render identity.
+
 ## Output guarantee
 
 `youtube_1080p30_v1` produces MP4, 1920x1080, 30 fps, H.264/yuv420p and exactly one AAC 48 kHz
 narration stream. Visual fit is `contain` on black. Final mode rejects all gaps; preview mode renders
 declared gaps as deterministic black diagnostic frames. Output duration stays within one frame of
 the authoritative timeline.
+
+`youtube_1080p30_program_audio_v1` preserves the visual policy and requires one AAC 48 kHz stereo
+program stream. All manifests render video-only first; the lossless narration/program PCM is muxed
+with video copy and encoded to AAC exactly once. Legacy V1/V2/V3 remain mono and keep their existing
+manifest/fingerprint paths.
 
 Unsupported future source types, transitions or playback rates fail explicitly. The Composer never
 selects an alternative source.

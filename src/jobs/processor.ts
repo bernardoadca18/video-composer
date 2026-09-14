@@ -78,18 +78,23 @@ export class RenderJobProcessor {
       this.repository.updateProgress(job.id, 'rendering', 0.1);
       const renderStarted = performance.now();
       let lastPersisted = -1;
-      await this.renderer.render(job.manifest, temporaryOutput, (progress) => {
-        const percent = Math.floor(progress.progress * 100);
-        if (percent >= lastPersisted + 2 || percent === 100) {
-          lastPersisted = percent;
-          this.repository.updateProgress(
-            job.id,
-            'rendering',
-            0.1 + progress.progress * 0.8,
-            Math.max(progress.renderedFrames, progress.encodedFrames),
-          );
-        }
-      });
+      await this.renderer.render(
+        job.manifest,
+        temporaryOutput,
+        (progress) => {
+          const percent = Math.floor(progress.progress * 100);
+          if (percent >= lastPersisted + 2 || percent === 100) {
+            lastPersisted = percent;
+            this.repository.updateProgress(
+              job.id,
+              'rendering',
+              0.1 + progress.progress * 0.8,
+              Math.max(progress.renderedFrames, progress.encodedFrames),
+            );
+          }
+        },
+        { renderId: job.id },
+      );
       const renderSeconds = (performance.now() - renderStarted) / 1000;
       this.repository.updateProgress(job.id, 'validating', 0.92, job.totalFrames);
       const validationStarted = performance.now();

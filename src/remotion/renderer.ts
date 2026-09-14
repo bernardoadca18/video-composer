@@ -13,14 +13,28 @@ export interface RenderProgress {
   progress: number;
 }
 
+export interface RenderContext {
+  renderId: string;
+}
+
 export interface VideoRenderer {
   initialize(): Promise<void>;
   render(
     manifest: RenderManifest,
     outputPath: string,
     onProgress: (progress: RenderProgress) => void,
+    context?: RenderContext,
   ): Promise<void>;
 }
+
+const sanitizeDiagnostic = (value: string): string =>
+  value
+    .replace(/\b(https?:\/\/)([^\s/:@]+):([^\s/@]+)@/giu, '$1[redacted]@')
+    .replace(
+      /([?&](?:access_token|api_key|key|secret|signature|token)=)[^\s&#]*/giu,
+      '$1[redacted]',
+    )
+    .slice(0, 16_384);
 
 export class RemotionVideoRenderer implements VideoRenderer {
   private serveUrl: string | null = null;
@@ -52,8 +66,10 @@ export class RemotionVideoRenderer implements VideoRenderer {
     manifest: RenderManifest,
     outputPath: string,
     onProgress: (progress: RenderProgress) => void,
+    context?: RenderContext,
   ): Promise<void> {
     if (!this.serveUrl) throw new ComposerError('renderer_unavailable', 'Renderer is not ready');
+    let renderPhase: 'select_composition' | 'render_media' = 'select_composition';
     try {
       const composition = await selectComposition({
         serveUrl: this.serveUrl,
@@ -61,6 +77,7 @@ export class RemotionVideoRenderer implements VideoRenderer {
         inputProps: manifest,
         logLevel: 'warn',
       });
+      renderPhase = 'render_media';
       await renderMedia({
         serveUrl: this.serveUrl,
         composition,
@@ -99,7 +116,24 @@ export class RemotionVideoRenderer implements VideoRenderer {
             progress: value.progress,
           }),
       });
-    } catch {
+    } catch (error) {
+      const errorType = error instanceof Error ? error.name : typeof error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'remotion_render_failed',
+          render_id: context?.renderId ?? null,
+          workflow_id: manifest.workflow_id,
+          manifest_schema_version: manifest.schema_version,
+          composer_strategy_version: manifest.composer_strategy_version,
+          render_phase: renderPhase,
+          error_type: sanitizeDiagnostic(errorType),
+          error_message: sanitizeDiagnostic(errorMessage),
+          error_stack: errorStack ? sanitizeDiagnostic(errorStack) : null,
+        }),
+      );
       throw new ComposerError('remotion_render_failure', 'Remotion render failed');
     }
   }

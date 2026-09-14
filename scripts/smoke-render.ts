@@ -82,6 +82,70 @@ const extractPixel = async (filePath: string, seconds: number): Promise<number[]
     });
   });
 
+interface RegionStats {
+  mean_rgb: [number, number, number];
+  bright_pixels: number;
+  pixel_count: number;
+}
+
+const extractRegionStats = async (
+  filePath: string,
+  seconds: number,
+  region: { x: number; y: number; width: number; height: number },
+): Promise<RegionStats> =>
+  await new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', [
+      '-v',
+      'error',
+      '-ss',
+      seconds.toFixed(3),
+      '-i',
+      filePath,
+      '-frames:v',
+      '1',
+      '-vf',
+      `crop=${region.width}:${region.height}:${region.x}:${region.y}`,
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'rgb24',
+      '-',
+    ]);
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const value = Buffer.concat(stdout);
+      const pixelCount = region.width * region.height;
+      if (code !== 0 || value.length !== pixelCount * 3) {
+        reject(
+          new Error(
+            `frame region extraction failed: ${Buffer.concat(stderr).toString('utf8').trim()}`,
+          ),
+        );
+        return;
+      }
+      const sums = [0, 0, 0];
+      let brightPixels = 0;
+      for (let offset = 0; offset < value.length; offset += 3) {
+        const red = value[offset]!;
+        const green = value[offset + 1]!;
+        const blue = value[offset + 2]!;
+        sums[0]! += red;
+        sums[1]! += green;
+        sums[2]! += blue;
+        if (red >= 90 && green >= 90 && blue >= 90) brightPixels += 1;
+      }
+      resolve({
+        mean_rgb: sums.map((sum) => Math.round(sum / pixelCount)) as [number, number, number],
+        bright_pixels: brightPixels,
+        pixel_count: pixelCount,
+      });
+    });
+  });
+
 const main = async (): Promise<void> => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'neovids-stage16-smoke-'));
   const persistentRoot = path.resolve('data/smoke');
@@ -561,11 +625,54 @@ const main = async (): Promise<void> => {
         `Visual inspection failed: ${JSON.stringify({ beginning, imageOne, videoTwo, ending })}`,
       );
     }
+    const frameCount = Number(video.nb_frames);
+    const expectedFrameCount = Math.ceil(duration * 30);
+    if (!Number.isInteger(frameCount) || frameCount !== expectedFrameCount) {
+      throw new Error(`Frame count mismatch: ${frameCount} != ${expectedFrameCount}`);
+    }
+    const overlayValidation = presentationEnabled
+      ? {
+          captions: await extractRegionStats(outputPath, 1, {
+            x: 300,
+            y: 840,
+            width: 1320,
+            height: 190,
+          }),
+          section_title: await extractRegionStats(outputPath, duration / 2 + 1, {
+            x: 70,
+            y: 90,
+            width: 1250,
+            height: 190,
+          }),
+          branding: await extractRegionStats(outputPath, segment + 1, {
+            x: 1420,
+            y: 40,
+            width: 400,
+            height: 110,
+          }),
+          fade_to_black: await extractPixel(outputPath, duration / 2),
+        }
+      : null;
+    if (
+      overlayValidation &&
+      (overlayValidation.captions.bright_pixels < 100 ||
+        overlayValidation.section_title.bright_pixels < 100 ||
+        overlayValidation.branding.bright_pixels < 50 ||
+        Math.max(...overlayValidation.fade_to_black) > 20)
+    ) {
+      throw new Error(
+        `Presentation overlay inspection failed: ${JSON.stringify(overlayValidation)}`,
+      );
+    }
     const cacheResponse = await fetch(`${baseUrl}/v1/renders`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': hybrid ? 'hybrid-cache-smoke' : 'stage16-cache-smoke',
+        'Idempotency-Key': presentationEnabled
+          ? 'presentation-cache-smoke'
+          : hybrid
+            ? 'hybrid-cache-smoke'
+            : 'stage16-cache-smoke',
       },
       body: JSON.stringify({
         workflow_id: WORKFLOW_ID,
@@ -575,12 +682,30 @@ const main = async (): Promise<void> => {
     });
     const cacheCreated = (await cacheResponse.json()) as { id: string };
     const cacheCompleted = await waitForRender(baseUrl, cacheCreated.id);
+    const engineMetrics = completed.metrics as Record<string, unknown>;
+    const cacheMetrics = cacheCompleted.metrics as Record<string, unknown>;
+    const expectedPresentationFingerprint = presentation?.fingerprint ?? null;
+    if (
+      presentationEnabled &&
+      (completed.presentation_fingerprint !== expectedPresentationFingerprint ||
+        cacheCompleted.presentation_fingerprint !== expectedPresentationFingerprint ||
+        completed.production_timeline_fingerprint !==
+          cacheCompleted.production_timeline_fingerprint ||
+        engineMetrics.composerStrategyVersion !== 'video_composer_v3_presentation' ||
+        cacheMetrics.composerStrategyVersion !== 'video_composer_v3_presentation')
+    ) {
+      throw new Error(
+        `Presentation identity validation failed: ${JSON.stringify({ completed, cacheCompleted })}`,
+      );
+    }
     const result = {
       smoke: realNarrationUrl
         ? 'REAL_NARRATION_RENDER_SMOKE'
-        : hybrid
-          ? 'HYBRID_VISUAL_RENDER_SMOKE'
-          : 'VIDEO_COMPOSER_ENGINE_SMOKE',
+        : presentationEnabled
+          ? 'PRESENTATION_RENDER_SMOKE'
+          : hybrid
+            ? 'HYBRID_VISUAL_RENDER_SMOKE'
+            : 'VIDEO_COMPOSER_ENGINE_SMOKE',
       status: 'PASS',
       render_id: created.id,
       output_path: outputPath,
@@ -591,31 +716,65 @@ const main = async (): Promise<void> => {
       audio_codec: audio.codec_name,
       audio_sample_rate: Number(audio.sample_rate),
       duration_seconds: mediaDuration(outputProbe),
+      frame_count: frameCount,
+      expected_frame_count: expectedFrameCount,
       byte_size: (await stat(outputPath)).size,
       sha256: await sha256File(outputPath),
       wall_seconds: wallSeconds,
       render_factor: wallSeconds / duration,
       engine_metrics: completed.metrics,
       second_render_cache_metrics: cacheCompleted.metrics,
+      manifest_schema_version: presentationEnabled
+        ? 'render_manifest_v3'
+        : hybrid
+          ? 'render_manifest_v2'
+          : 'render_manifest_v1',
+      presentation_strategy_version: presentationEnabled
+        ? presentationContent.strategy_version
+        : null,
+      presentation_fingerprint: completed.presentation_fingerprint ?? null,
+      manifest_fingerprint: completed.manifest_fingerprint,
+      render_fingerprint: completed.render_fingerprint,
+      second_manifest_fingerprint: cacheCompleted.manifest_fingerprint,
+      second_render_fingerprint: cacheCompleted.render_fingerprint,
+      content_fingerprints_stable: {
+        production_timeline:
+          completed.production_timeline_fingerprint ===
+          cacheCompleted.production_timeline_fingerprint,
+        presentation:
+          completed.presentation_fingerprint === cacheCompleted.presentation_fingerprint,
+      },
       inspected_pixels: {
         video_one: beginning,
         image_one: imageOne,
         video_two: videoTwo,
         image_two: ending,
       },
+      overlay_validation: overlayValidation,
       gameplay_audio_streams_in_proxy: 0,
       final_audio_streams: outputProbe.streams.filter((item) => item.codec_type === 'audio').length,
     };
     await writeFile(
       path.join(
         persistentRoot,
-        realNarrationUrl ? 'real-narration.json' : hybrid ? 'hybrid-engine.json' : 'engine.json',
+        realNarrationUrl
+          ? 'real-narration.json'
+          : presentationEnabled
+            ? 'presentation-engine.json'
+            : hybrid
+              ? 'hybrid-engine.json'
+              : 'engine.json',
       ),
       `${JSON.stringify(result, null, 2)}\n`,
     );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
-    process.stderr.write(`${Buffer.concat(childLogs).toString('utf8')}\n`);
+    const composerLogs = Buffer.concat(childLogs).toString('utf8').trim();
+    if (composerLogs) {
+      process.stderr.write(
+        `VIDEO_COMPOSER_CHILD_LOGS_BEGIN\n${composerLogs}\nVIDEO_COMPOSER_CHILD_LOGS_END\n`,
+      );
+    }
     throw error;
   } finally {
     child?.kill('SIGTERM');

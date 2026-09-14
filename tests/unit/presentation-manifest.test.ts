@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fingerprint } from '../../src/core/identity.js';
-import type { PresentationSpec } from '../../src/domain/contracts.js';
+import { type PresentationSpec, RenderManifestV3Schema } from '../../src/domain/contracts.js';
 import { buildRenderManifest } from '../../src/domain/manifest.js';
 import { youtube1080p30V1 } from '../../src/domain/profiles.js';
 import { PRESENTATION_LAYER_ORDER } from '../../src/remotion/presentation/PresentationLayers.js';
@@ -153,5 +153,38 @@ describe('presentation render manifest identity', () => {
         fingerprint: 'f'.repeat(64),
       }),
     ).toThrow(/fingerprint/);
+  });
+
+  it('rejects a transition whose fade-in collapses to zero frames', () => {
+    const input = presentation({
+      transitions: [
+        {
+          type: 'fade_to_black',
+          boundary_seconds: 2,
+          duration_seconds: 0.3,
+          preset: 'section_boundary_fade_v1',
+        },
+      ],
+    });
+    const result = buildRenderManifest(
+      productionTimeline(),
+      metadata,
+      youtube1080p30V1,
+      'final',
+      config,
+      input,
+    );
+    expect(result.manifest.schema_version).toBe('render_manifest_v3');
+    if (result.manifest.schema_version !== 'render_manifest_v3') throw new Error('Expected V3');
+    const transition = result.manifest.presentation.transitions[0]!;
+    expect(() =>
+      RenderManifestV3Schema.parse({
+        ...result.manifest,
+        presentation: {
+          ...result.manifest.presentation,
+          transitions: [{ ...transition, boundary_frame: transition.frame_start }],
+        },
+      }),
+    ).toThrow(/Transition has an invalid frame range/);
   });
 });

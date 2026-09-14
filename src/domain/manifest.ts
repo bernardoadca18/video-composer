@@ -644,7 +644,7 @@ export function buildRenderManifest(
         const start = quantized.frameAt(startSeconds);
         const boundary = quantized.frameAt(item.boundary_seconds);
         const end = quantized.frameAt(endSeconds);
-        if (end <= start || boundary < start || boundary > end) {
+        if (end <= start || boundary <= start || boundary >= end) {
           throw new ManifestValidationError(
             'frame_quantization',
             'Transition collapsed to an invalid frame range',

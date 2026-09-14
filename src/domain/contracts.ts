@@ -580,13 +580,13 @@ export const RenderManifestV3Schema = z
     }
     value.presentation.transitions.forEach((item, index) => {
       if (
-        item.frame_start > item.boundary_frame ||
+        item.frame_start >= item.boundary_frame ||
         item.frame_start + item.duration_frames > duration ||
         item.boundary_frame >= item.frame_start + item.duration_frames
       ) {
         context.addIssue({
           code: 'custom',
-          message: 'Transition exceeds render duration',
+          message: 'Transition has an invalid frame range',
           path: ['presentation', 'transitions', index],
         });
       }

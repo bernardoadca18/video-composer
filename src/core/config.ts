@@ -9,6 +9,7 @@ const EnvironmentSchema = z.object({
   ORCHESTRATOR_BASE_URL: z.url().default('http://localhost:8011'),
   MEDIA_INDEXER_BASE_URL: z.url().default('http://localhost:8012'),
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  ASSET_DOWNLOAD_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   MAX_QUEUE_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   RENDER_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
   REMOTION_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
@@ -39,6 +40,7 @@ export interface AppConfig {
   orchestratorBaseUrl: string;
   mediaIndexerBaseUrl: string;
   httpTimeoutMs: number;
+  assetDownloadIdleTimeoutMs: number;
   maxQueueSize: number;
   renderWorkerConcurrency: number;
   remotionConcurrency: number;
@@ -72,6 +74,7 @@ export const loadConfig = (environment: NodeJS.ProcessEnv = process.env): AppCon
     orchestratorBaseUrl: value.ORCHESTRATOR_BASE_URL.replace(/\/$/, ''),
     mediaIndexerBaseUrl: value.MEDIA_INDEXER_BASE_URL.replace(/\/$/, ''),
     httpTimeoutMs: value.HTTP_TIMEOUT_MS,
+    assetDownloadIdleTimeoutMs: value.ASSET_DOWNLOAD_IDLE_TIMEOUT_MS,
     maxQueueSize: value.MAX_QUEUE_SIZE,
     renderWorkerConcurrency: value.RENDER_WORKER_CONCURRENCY,
     remotionConcurrency: value.REMOTION_CONCURRENCY,

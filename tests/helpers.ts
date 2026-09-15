@@ -33,6 +33,7 @@ export const testConfig = (root: string): AppConfig => ({
   orchestratorBaseUrl: 'http://orchestrator.test',
   mediaIndexerBaseUrl: 'http://media-indexer.test',
   httpTimeoutMs: 1_000,
+  assetDownloadIdleTimeoutMs: 1_000,
   maxQueueSize: 10,
   renderWorkerConcurrency: 1,
   remotionConcurrency: 1,

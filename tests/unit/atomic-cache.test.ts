@@ -18,10 +18,15 @@ describe('atomic content cache', () => {
       downloads += 1;
       return new Response(content);
     };
+    const options = {
+      idleTimeoutMs: 1_000,
+      maximumBytes: content.length,
+      context: { sourceKind: 'gameplay' as const },
+    };
 
     const [first, second] = await Promise.all([
-      materializeResponse(target, sha, content.length, response),
-      materializeResponse(target, sha, content.length, response),
+      materializeResponse(target, sha, content.length, response, options),
+      materializeResponse(target, sha, content.length, response, options),
     ]);
 
     expect(downloads).toBe(1);
@@ -29,7 +34,7 @@ describe('atomic content cache', () => {
     expect(await readFile(target)).toEqual(content);
 
     await writeFile(target, Buffer.alloc(content.length, 1));
-    const rebuilt = await materializeResponse(target, sha, content.length, response);
+    const rebuilt = await materializeResponse(target, sha, content.length, response, options);
     expect(rebuilt.cacheHit).toBe(false);
     expect(downloads).toBe(2);
     expect(await readFile(target)).toEqual(content);
@@ -39,7 +44,11 @@ describe('atomic content cache', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'composer-cache-'));
     const target = path.join(root, 'asset.media');
     await expect(
-      materializeResponse(target, '0'.repeat(64), null, async () => new Response('wrong')),
+      materializeResponse(target, '0'.repeat(64), null, async () => new Response('wrong'), {
+        idleTimeoutMs: 1_000,
+        maximumBytes: 5,
+        context: { sourceKind: 'gameplay' },
+      }),
     ).rejects.toThrow('Downloaded asset identity mismatch');
     await expect(readFile(target)).rejects.toThrow();
   });

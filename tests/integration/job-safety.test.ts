@@ -2,7 +2,7 @@ import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MediaIndexerClient } from '../../src/clients/media-indexer.js';
 import { OrchestratorClient } from '../../src/clients/orchestrator.js';
@@ -22,7 +22,10 @@ import { RenderCoordinator } from '../../src/services/render-coordinator.js';
 import { renderManifest, testConfig, TIMELINE_ID, WORKFLOW_ID } from '../helpers.js';
 
 const repositories: RenderJobRepository[] = [];
-afterEach(() => repositories.splice(0).forEach((item) => item.close()));
+afterEach(() => {
+  repositories.splice(0).forEach((item) => item.close());
+  vi.restoreAllMocks();
+});
 
 const createJob = (repository: RenderJobRepository, root: string, id: string) =>
   repository.create({
@@ -41,6 +44,54 @@ const createJob = (repository: RenderJobRepository, root: string, id: string) =>
   });
 
 describe('render job safety', () => {
+  it('logs private diagnostics for an unknown preparation error and keeps public state safe', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'composer-observability-'));
+    const config = testConfig(root);
+    const repository = new RenderJobRepository(config.databasePath);
+    repositories.push(repository);
+    const job = createJob(repository, root, '80000000-0000-4000-8000-000000000002');
+    const lowLevel = new Error('synthetic stream socket reset');
+    lowLevel.name = 'UndiciStreamError';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const processor = new RenderJobProcessor(
+      config,
+      repository,
+      { resolve: async () => await Promise.reject(lowLevel) } as unknown as NarrationAssetResolver,
+      {} as GameplaySourceResolver,
+      {} as MusicAssetResolver,
+      {} as ClipProxyPreparer,
+      {} as VideoRenderer,
+      {} as ProgramAudioProcessor,
+    );
+
+    await processor.process(job.id);
+
+    const failed = repository.get(job.id)!;
+    expect(failed.status).toBe('failed');
+    expect(failed.progress).toBe(0.02);
+    expect(failed.framesRendered).toBe(0);
+    expect(failed.errorCategory).toBe('internal_error');
+    expect(failed.errorMessage).toBe('Video Composer operation failed');
+    const record = JSON.parse(String(errorLog.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      event: 'render_failed',
+      render_id: job.id,
+      workflow_id: WORKFLOW_ID,
+      render_profile: 'youtube_1080p30_v1',
+      phase: 'preparing_assets',
+      progress: 0.02,
+      frames_rendered: 0,
+      preparation_step: 'materializing_narration',
+      source_kind: 'narration',
+      internal_exception_name: 'UndiciStreamError',
+      internal_exception_message: 'synthetic stream socket reset',
+      error_category: 'internal_error',
+      error_message: 'Video Composer operation failed',
+    });
+    expect(record.internal_exception_stack).toContain('synthetic stream socket reset');
+    expect(record.elapsed_ms).toEqual(expect.any(Number));
+  });
+
   it('does not publish an invalid partial output', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'composer-job-'));
     const config = testConfig(root);

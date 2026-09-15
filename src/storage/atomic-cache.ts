@@ -16,6 +16,22 @@ export interface CachedFile {
   sha256: string;
 }
 
+export interface MaterializationContext {
+  sourceKind: 'narration' | 'gameplay' | 'static_image' | 'music';
+  mediaId?: string;
+  assetId?: string;
+}
+
+export interface MaterializationOptions {
+  idleTimeoutMs: number;
+  maximumBytes: number;
+  context: MaterializationContext;
+}
+
+class AssetTransferIdleTimeoutError extends Error {
+  override readonly name = 'AssetTransferIdleTimeoutError';
+}
+
 const pause = async (milliseconds: number): Promise<void> =>
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -71,7 +87,8 @@ export const materializeResponse = async (
   target: string,
   expectedSha256: string,
   expectedSize: number | null,
-  responseFactory: () => Promise<Response>,
+  responseFactory: (transferSignal: AbortSignal) => Promise<Response>,
+  options: MaterializationOptions,
 ): Promise<CachedFile> => {
   const lockPath = `${target}.lock`;
   return await withFileLock(lockPath, async () => {
@@ -80,15 +97,64 @@ export const materializeResponse = async (
     await mkdir(path.dirname(target), { recursive: true });
     await unlink(target).catch(() => undefined);
     const temporary = `${target}.${randomUUID()}.tmp`;
+    const started = performance.now();
+    const transferController = new AbortController();
+    let idleTimeout: NodeJS.Timeout | undefined;
+    let idleTimeoutError: AssetTransferIdleTimeoutError | undefined;
+    let byteSize = 0;
+    const diagnostics = () => ({
+      source_kind: options.context.sourceKind,
+      media_id: options.context.mediaId,
+      asset_id: options.context.assetId,
+      expected_size_bytes: expectedSize,
+      maximum_size_bytes: options.maximumBytes,
+      bytes_written: byteSize,
+      elapsed_ms: Math.round(performance.now() - started),
+      retryable: true,
+    });
+    const armIdleTimeout = (): void => {
+      if (idleTimeout) clearTimeout(idleTimeout);
+      idleTimeout = setTimeout(() => {
+        idleTimeoutError = new AssetTransferIdleTimeoutError(
+          `Asset transfer made no progress for ${options.idleTimeoutMs} ms`,
+        );
+        transferController.abort(idleTimeoutError);
+      }, options.idleTimeoutMs);
+    };
     try {
-      const response = await responseFactory();
+      armIdleTimeout();
+      const response = await responseFactory(transferController.signal);
       if (!response.body) throw new ComposerError('dependency_contract', 'Empty asset response');
+      const contentLength = response.headers.get('content-length');
+      if (
+        expectedSize !== null &&
+        contentLength !== null &&
+        Number.parseInt(contentLength, 10) !== expectedSize
+      ) {
+        throw new ComposerError(
+          'asset_identity_mismatch',
+          'Downloaded asset identity mismatch',
+          500,
+          { diagnostics: diagnostics() },
+        );
+      }
       const digest = createHash('sha256');
-      let byteSize = 0;
       const hashing = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           digest.update(chunk);
           byteSize += chunk.length;
+          if (byteSize > options.maximumBytes) {
+            callback(
+              new ComposerError(
+                'asset_identity_mismatch',
+                'Downloaded asset exceeds maximum size',
+                500,
+                { diagnostics: diagnostics() },
+              ),
+            );
+            return;
+          }
+          armIdleTimeout();
           callback(null, chunk);
         },
       });
@@ -96,10 +162,17 @@ export const materializeResponse = async (
         Readable.fromWeb(response.body as NodeReadableStream),
         hashing,
         createWriteStream(temporary, { flags: 'wx' }),
+        { signal: transferController.signal },
       );
+      if (idleTimeout) clearTimeout(idleTimeout);
       const actualSha256 = digest.digest('hex');
       if (actualSha256 !== expectedSha256 || (expectedSize !== null && byteSize !== expectedSize)) {
-        throw new ComposerError('asset_identity_mismatch', 'Downloaded asset identity mismatch');
+        throw new ComposerError(
+          'asset_identity_mismatch',
+          'Downloaded asset identity mismatch',
+          500,
+          { diagnostics: diagnostics() },
+        );
       }
       const handle = await open(temporary, 'r');
       await handle.sync();
@@ -107,8 +180,18 @@ export const materializeResponse = async (
       await rename(temporary, target);
       return { path: target, cacheHit: false, byteSize, sha256: actualSha256 };
     } catch (error) {
+      if (idleTimeout) clearTimeout(idleTimeout);
       await unlink(temporary).catch(() => undefined);
-      throw error;
+      if (error instanceof ComposerError) throw error;
+      throw new ComposerError(
+        'asset_materialization_failed',
+        'Falha ao materializar mídia necessária para o render.',
+        502,
+        {
+          cause: idleTimeoutError ?? error,
+          diagnostics: diagnostics(),
+        },
+      );
     }
   });
 };

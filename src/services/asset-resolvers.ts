@@ -10,6 +10,7 @@ export class NarrationAssetResolver {
   constructor(
     private readonly root: string,
     private readonly client: OrchestratorClient,
+    private readonly idleTimeoutMs = 30_000,
   ) {}
 
   async resolve(
@@ -21,7 +22,12 @@ export class NarrationAssetResolver {
       path.join(this.root, `${expectedSha256}.wav`),
       expectedSha256,
       expectedSize,
-      async () => await this.client.openNarration(workflowId),
+      async (signal) => await this.client.openNarration(workflowId, signal),
+      {
+        idleTimeoutMs: this.idleTimeoutMs,
+        maximumBytes: expectedSize ?? 2_147_483_648,
+        context: { sourceKind: 'narration' },
+      },
     );
   }
 }
@@ -30,18 +36,25 @@ export class GameplaySourceResolver {
   constructor(
     private readonly root: string,
     private readonly client: MediaIndexerClient,
+    private readonly idleTimeoutMs = 30_000,
   ) {}
 
   async resolve(
     mediaId: string,
     expectedSha256: string,
     expectedSize: number,
+    sourceKind: 'gameplay' | 'static_image' = 'gameplay',
   ): Promise<CachedFile> {
     return await materializeResponse(
       path.join(this.root, `${expectedSha256}.media`),
       expectedSha256,
       expectedSize,
-      async () => await this.client.openContent(mediaId),
+      async (signal) => await this.client.openContent(mediaId, signal),
+      {
+        idleTimeoutMs: this.idleTimeoutMs,
+        maximumBytes: expectedSize,
+        context: { sourceKind, mediaId },
+      },
     );
   }
 }
@@ -50,6 +63,7 @@ export class MusicAssetResolver {
   constructor(
     private readonly root: string,
     private readonly client: OrchestratorClient,
+    private readonly idleTimeoutMs = 30_000,
   ) {}
 
   async resolve(
@@ -64,19 +78,34 @@ export class MusicAssetResolver {
         path.join(this.root, `${expectedSha256}.${format}`),
         expectedSha256,
         expectedSize,
-        async () => await this.client.openMusicAsset(workflowId, assetId, expectedSha256),
+        async (signal) =>
+          await this.client.openMusicAsset(workflowId, assetId, expectedSha256, signal),
+        {
+          idleTimeoutMs: this.idleTimeoutMs,
+          maximumBytes: expectedSize,
+          context: { sourceKind: 'music', assetId },
+        },
       );
     } catch (error) {
       if (
         error instanceof ComposerError &&
         ['upstream_artifact_missing', 'dependency_unavailable'].includes(error.category)
       ) {
-        throw new ComposerError('music_asset_unavailable', 'Music asset is unavailable', 409);
+        throw new ComposerError('music_asset_unavailable', 'Music asset is unavailable', 409, {
+          cause: error,
+          diagnostics: error.diagnostics,
+        });
       }
+      if (error instanceof ComposerError && error.category === 'asset_materialization_failed')
+        throw error;
       throw new ComposerError(
         'music_asset_integrity_failed',
         'Music asset failed immutable identity validation',
         409,
+        {
+          cause: error,
+          diagnostics: error instanceof ComposerError ? error.diagnostics : {},
+        },
       );
     }
   }

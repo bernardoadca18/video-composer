@@ -23,7 +23,38 @@ export class MediaIndexerClient {
       );
     } catch (error) {
       if (error instanceof ComposerError) throw error;
-      throw new ComposerError('dependency_unavailable', 'Media Indexer is unavailable', 502);
+      throw new ComposerError('dependency_unavailable', 'Media Indexer is unavailable', 502, {
+        cause: error,
+      });
+    }
+  }
+
+  private async requestAsset(path: string, transferSignal: AbortSignal): Promise<Response> {
+    const headerController = new AbortController();
+    const headerTimeout = setTimeout(
+      () =>
+        headerController.abort(
+          new DOMException('Media Indexer response headers timed out', 'TimeoutError'),
+        ),
+      this.timeoutMs,
+    );
+    try {
+      const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+        signal: AbortSignal.any([headerController.signal, transferSignal]),
+      });
+      if (response.ok) return response;
+      throw new ComposerError(
+        response.status === 404 ? 'source_asset_missing' : 'dependency_unavailable',
+        response.status === 404 ? 'Media asset not found' : 'Media Indexer request failed',
+        response.status === 404 ? 404 : 502,
+      );
+    } catch (error) {
+      if (error instanceof ComposerError) throw error;
+      throw new ComposerError('dependency_unavailable', 'Media Indexer is unavailable', 502, {
+        cause: error,
+      });
+    } finally {
+      clearTimeout(headerTimeout);
     }
   }
 
@@ -36,7 +67,7 @@ export class MediaIndexerClient {
     }
   }
 
-  async openContent(mediaId: string): Promise<Response> {
-    return await this.request(`/media-assets/${mediaId}/content`);
+  async openContent(mediaId: string, transferSignal: AbortSignal): Promise<Response> {
+    return await this.requestAsset(`/media-assets/${mediaId}/content`, transferSignal);
   }
 }

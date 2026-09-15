@@ -2,7 +2,7 @@ import { mkdir, rename, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AppConfig } from '../core/config.js';
-import { ComposerError, publicError } from '../core/errors.js';
+import { ComposerError, internalError, publicError } from '../core/errors.js';
 import { validateMusicAsset, validateNarration, validateStaticImage } from '../media/probe.js';
 import type { ProgramAudioResult } from '../media/program-audio.js';
 import type { ProgramAudioProcessor } from '../media/program-audio.js';
@@ -15,6 +15,15 @@ import type {
   NarrationAssetResolver,
 } from '../services/asset-resolvers.js';
 import type { RenderJobRepository } from './repository.js';
+
+interface ActivePreparationOperation {
+  preparationStep: string;
+  sourceKind?: 'narration' | 'gameplay' | 'static_image' | 'music' | 'proxy';
+  mediaId?: string;
+  assetId?: string;
+  expectedSizeBytes?: number | null;
+  startedAt: number;
+}
 
 export class RenderJobProcessor {
   constructor(
@@ -36,17 +45,30 @@ export class RenderJobProcessor {
     const temporaryOutput = path.join(workDirectory, 'output.tmp.mp4');
     const temporaryVideo = path.join(workDirectory, 'video-only.tmp.mp4');
     const finalOutput = path.join(this.config.outputRoot, `${job.id}.mp4`);
+    let activePreparation: ActivePreparationOperation | null = null;
     await mkdir(workDirectory, { recursive: true });
     await mkdir(this.config.outputRoot, { recursive: true });
     await unlink(temporaryOutput).catch(() => undefined);
     try {
       this.repository.updateProgress(job.id, 'preparing_assets', 0.02);
       const preparationStarted = performance.now();
+      activePreparation = {
+        preparationStep: 'materializing_narration',
+        sourceKind: 'narration',
+        expectedSizeBytes: job.manifest.narration.byte_size,
+        startedAt: performance.now(),
+      };
       const narration = await this.narrationResolver.resolve(
         job.workflowId,
         job.manifest.narration.sha256,
         job.manifest.narration.byte_size,
       );
+      activePreparation = {
+        preparationStep: 'validating_narration',
+        sourceKind: 'narration',
+        expectedSizeBytes: job.manifest.narration.byte_size,
+        startedAt: performance.now(),
+      };
       await validateNarration(
         this.config.ffprobeBinary,
         narration.path,
@@ -66,6 +88,13 @@ export class RenderJobProcessor {
         let music = null;
         if (job.manifest.audio_mix_plan.music.enabled) {
           const asset = job.manifest.audio_mix_plan.music.asset;
+          activePreparation = {
+            preparationStep: 'materializing_music',
+            sourceKind: 'music',
+            assetId: asset.asset_id,
+            expectedSizeBytes: asset.byte_size,
+            startedAt: performance.now(),
+          };
           music = await this.musicResolver.resolve(
             job.workflowId,
             asset.asset_id,
@@ -74,6 +103,13 @@ export class RenderJobProcessor {
             asset.format,
           );
           musicCacheHit = music.cacheHit;
+          activePreparation = {
+            preparationStep: 'validating_music',
+            sourceKind: 'music',
+            assetId: asset.asset_id,
+            expectedSizeBytes: asset.byte_size,
+            startedAt: performance.now(),
+          };
           await validateMusicAsset(this.config.ffprobeBinary, music.path, {
             durationSeconds: asset.duration_seconds,
             sampleRate: asset.sample_rate,
@@ -99,6 +135,11 @@ export class RenderJobProcessor {
             profile_id: job.manifest.audio_mix_plan.program_master.profile_id,
           }),
         );
+        activePreparation = {
+          preparationStep: 'preparing_program_audio',
+          sourceKind: 'narration',
+          startedAt: performance.now(),
+        };
         programAudioResult = await this.programAudio.prepare(job.manifest, narration.path, music);
         console.info(
           JSON.stringify({
@@ -124,14 +165,31 @@ export class RenderJobProcessor {
       const sourcePaths = new Map<string, string>();
       let sourceCacheHits = 0;
       for (const asset of job.manifest.source_assets) {
+        const sourceKind =
+          'media_kind' in asset && asset.media_kind === 'image' ? 'static_image' : 'gameplay';
+        activePreparation = {
+          preparationStep: 'materializing_source',
+          sourceKind,
+          mediaId: asset.media_id,
+          expectedSizeBytes: asset.byte_size,
+          startedAt: performance.now(),
+        };
         const source = await this.sourceResolver.resolve(
           asset.media_id,
           asset.sha256,
           asset.byte_size,
+          sourceKind,
         );
         sourcePaths.set(asset.sha256, source.path);
         if (source.cacheHit) sourceCacheHits += 1;
         if ('media_kind' in asset && asset.media_kind === 'image') {
+          activePreparation = {
+            preparationStep: 'validating_static_image',
+            sourceKind: 'static_image',
+            mediaId: asset.media_id,
+            expectedSizeBytes: asset.byte_size,
+            startedAt: performance.now(),
+          };
           await validateStaticImage(this.config.ffprobeBinary, source.path);
         }
       }
@@ -143,6 +201,12 @@ export class RenderJobProcessor {
       }
       let proxyCacheHits = 0;
       for (const placement of uniqueProxies.values()) {
+        activePreparation = {
+          preparationStep: 'generating_proxy',
+          sourceKind: 'proxy',
+          mediaId: placement.source.media_id,
+          startedAt: performance.now(),
+        };
         const sourcePath = sourcePaths.get(placement.source.sha256);
         if (!sourcePath)
           throw new ComposerError('source_asset_missing', 'Prepared source is missing');
@@ -151,6 +215,7 @@ export class RenderJobProcessor {
       }
       const preparationSeconds = (performance.now() - preparationStarted) / 1000;
       this.repository.updateProgress(job.id, 'rendering', 0.1);
+      activePreparation = null;
       const renderStarted = performance.now();
       let lastPersisted = -1;
       await this.renderer.render(
@@ -259,7 +324,20 @@ export class RenderJobProcessor {
       await unlink(temporaryOutput).catch(() => undefined);
       await unlink(temporaryVideo).catch(() => undefined);
       await unlink(finalOutput).catch(() => undefined);
+      const failureState = this.repository.get(job.id);
       const safe = publicError(error);
+      const internal = internalError(error);
+      const elapsedMs = Math.round(performance.now() - totalStarted);
+      const preparationContext = activePreparation
+        ? {
+            preparation_step: activePreparation.preparationStep,
+            source_kind: activePreparation.sourceKind,
+            media_id: activePreparation.mediaId,
+            asset_id: activePreparation.assetId,
+            expected_size_bytes: activePreparation.expectedSizeBytes,
+            step_elapsed_ms: Math.round(performance.now() - activePreparation.startedAt),
+          }
+        : {};
       this.repository.fail(job.id, safe.category, safe.message);
       console.error(
         JSON.stringify({
@@ -268,7 +346,16 @@ export class RenderJobProcessor {
           render_id: job.id,
           workflow_id: job.workflowId,
           render_profile: job.renderProfile,
-          phase: this.repository.get(job.id)?.phase,
+          phase: failureState?.phase,
+          progress: failureState?.progress,
+          frames_rendered: failureState?.framesRendered,
+          total_frames: failureState?.totalFrames,
+          elapsed_ms: elapsedMs,
+          ...preparationContext,
+          ...internal.diagnostics,
+          internal_exception_name: internal.name,
+          internal_exception_message: internal.message,
+          internal_exception_stack: internal.stack,
           error_category: safe.category,
           error_message: safe.message,
         }),

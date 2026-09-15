@@ -37,7 +37,35 @@ export class OrchestratorClient {
       );
     } catch (error) {
       if (error instanceof ComposerError) throw error;
-      throw new ComposerError('dependency_unavailable', 'Orchestrator is unavailable', 502);
+      throw new ComposerError('dependency_unavailable', 'Orchestrator is unavailable', 502, {
+        cause: error,
+      });
+    }
+  }
+
+  private async requestAsset(path: string, transferSignal: AbortSignal): Promise<Response> {
+    const headerController = new AbortController();
+    const headerTimeout = setTimeout(
+      () =>
+        headerController.abort(
+          new DOMException('Orchestrator response headers timed out', 'TimeoutError'),
+        ),
+      this.timeoutMs,
+    );
+    try {
+      return checkedResponse(
+        await this.fetchFn(`${this.baseUrl}${path}`, {
+          signal: AbortSignal.any([headerController.signal, transferSignal]),
+        }),
+        'Orchestrator',
+      );
+    } catch (error) {
+      if (error instanceof ComposerError) throw error;
+      throw new ComposerError('dependency_unavailable', 'Orchestrator is unavailable', 502, {
+        cause: error,
+      });
+    } finally {
+      clearTimeout(headerTimeout);
     }
   }
 
@@ -51,14 +79,20 @@ export class OrchestratorClient {
     return await this.parse(response, ComposerRenderInputSchema);
   }
 
-  async openNarration(workflowId: string): Promise<Response> {
-    return await this.request(`/workflow/${workflowId}/audio`);
+  async openNarration(workflowId: string, transferSignal: AbortSignal): Promise<Response> {
+    return await this.requestAsset(`/workflow/${workflowId}/audio`, transferSignal);
   }
 
-  async openMusicAsset(workflowId: string, assetId: string, sha256: string): Promise<Response> {
-    return await this.request(
+  async openMusicAsset(
+    workflowId: string,
+    assetId: string,
+    sha256: string,
+    transferSignal: AbortSignal,
+  ): Promise<Response> {
+    return await this.requestAsset(
       `/workflow/${workflowId}/music-assets/${encodeURIComponent(assetId)}` +
         `?sha256=${encodeURIComponent(sha256)}`,
+      transferSignal,
     );
   }
 

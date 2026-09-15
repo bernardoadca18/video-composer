@@ -115,6 +115,13 @@ Each exact Stage 15 trim becomes a cached H.264/yuv420p constant-30-fps proxy wi
 contains source SHA, source microseconds, FPS, codec and proxy strategy. FFprobe validates every new
 or reused proxy.
 
+`HTTP_TIMEOUT_MS` bounds control-plane requests and the wait for asset response headers.
+`ASSET_DOWNLOAD_IDLE_TIMEOUT_MS` is a separate data-plane inactivity limit: a large transfer may
+run longer than the control timeout while bytes keep arriving, but is aborted after that much time
+without progress. Every asset is restricted to its immutable expected byte size (legacy narration
+without a declared size has a 2 GiB ceiling), and incomplete temporary files are removed instead of
+being promoted into the cache.
+
 Run retention tools explicitly:
 
 ```bash

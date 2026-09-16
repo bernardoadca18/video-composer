@@ -19,6 +19,7 @@
     "test:integration": "vitest run tests/integration",
     "smoke:render": "tsx scripts/smoke-render.ts",
     "smoke:program-audio": "SMOKE_PROGRAM_AUDIO=1 tsx scripts/smoke-render.ts",
+    "prepare:window": "tsx scripts/prepare-render-window.ts",
     "smoke:window": "tsx scripts/smoke-render-window.ts",
     "benchmark": "tsx scripts/benchmark-render.ts",
     "benchmark:resources": "tsx scripts/benchmark-resources.ts",

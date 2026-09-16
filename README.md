@@ -217,3 +217,29 @@ See [contract details](docs/CONTRACT.md) and [operations](docs/OPERATIONS.md).
 - CPU correctness is supported; no GPU dependency or acceleration assumption;
 - real gameplay quality remains blocked by the current Media Indexer dataset;
 - Stage 17 automatic workflow-to-render orchestration is intentionally absent.
+
+### Bounded derivative preparation and frame smoke
+
+Use an existing render ID. These commands read the job without requeueing it and
+limit the smoke to a proper subset of at most 301 frames. Full-source fallback
+must remain disabled. Only intersecting proxy keys are materialized using the
+production derivative resolver, integrity checks and proxy inspection.
+
+```bash
+npm run prepare:window -- --render-id UUID --frame 2479 --before 60 --after 60
+npm run smoke:window -- --render-id UUID --frame 2479 --before 60 --after 60
+```
+
+If the saved job uses the historical proxy strategy, pass `--refresh-manifest true`
+to preparation. This reads the frozen render-input from the Orchestrator and uses
+the current production manifest builder. It saves a detached snapshot under
+`DATA_ROOT/work/smoke`, with both historical and current fingerprints. It never
+creates or modifies a production render job. Pass the reported snapshot path via
+`--prepared-manifest PATH` to the smoke. Its lineage, fingerprint and window are
+validated before rendering. A later authorized production render can have a new
+ID because its technical strategy changed.
+
+Preparation writes a `.preparation.json` report with actual HTTP paths, received
+body bytes, derivative metadata and proxy hits/misses. These are bounded-smoke
+observations, not full-render job metrics. No worker or full-source resolver is
+constructed. Run one preparation/smoke at a time.

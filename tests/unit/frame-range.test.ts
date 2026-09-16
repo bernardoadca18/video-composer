@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { requiredProxyKeysForFrameRange } from '../../src/domain/frame-range.js';
+import { boundedFrameRange, requiredProxyKeysForFrameRange } from '../../src/domain/frame-range.js';
 import { renderManifest } from '../helpers.js';
 
 describe('targeted render asset selection', () => {
@@ -14,5 +14,18 @@ describe('targeted render asset selection', () => {
       second.source.proxy_key,
     ]);
     expect(requiredProxyKeysForFrameRange(manifest, [90, 179])).toEqual([second.source.proxy_key]);
+  });
+});
+
+describe('bounded operational frame ranges', () => {
+  it('selects exactly the frame 2479 regression window', () => {
+    expect(boundedFrameRange(26290, 2479, 60, 60)).toEqual([2419, 2539]);
+  });
+  it('rejects full renders, oversized windows and invalid coordinates', () => {
+    expect(() => boundedFrameRange(121, 60, 60, 60)).toThrow();
+    expect(() => boundedFrameRange(26290, 2479, 200, 200)).toThrow();
+    expect(() => boundedFrameRange(26290, 26290, 60, 60)).toThrow();
+    expect(() => boundedFrameRange(26290, -1, 60, 60)).toThrow();
+    expect(() => boundedFrameRange(26290, 2479, -1, 60)).toThrow();
   });
 });

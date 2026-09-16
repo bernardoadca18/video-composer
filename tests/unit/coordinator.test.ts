@@ -104,8 +104,11 @@ describe('render coordinator', () => {
     metadata = mediaMetadata({ sha256: 'c'.repeat(64) });
     const changed = await coordinator.ensure(
       { workflow_id: WORKFLOW_ID, render_profile: 'youtube_1080p30_v1', mode: 'final' },
-      null,
+      'same-key',
     );
+    expect(changed.created).toBe(true);
+    expect(changed.job.id).not.toBe(first.job.id);
+    expect(changed.job.idempotencyKey).toBeNull();
     expect(changed.job.renderFingerprint).not.toBe(first.job.renderFingerprint);
   });
 

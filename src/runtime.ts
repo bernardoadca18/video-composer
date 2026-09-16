@@ -17,6 +17,8 @@ import {
   NarrationAssetResolver,
 } from './services/asset-resolvers.js';
 import { RenderCoordinator } from './services/render-coordinator.js';
+import { TemporalDerivativeResolver } from './services/temporal-derivative-resolver.js';
+import { CacheCatalog } from './storage/cache-catalog.js';
 
 export const startRuntime = async (config: AppConfig): Promise<void> => {
   await Promise.all(
@@ -35,6 +37,7 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
     runProcess(config.ffprobeBinary, ['-version'], 'ffprobe_unavailable'),
   ]);
   const repository = new RenderJobRepository(config.databasePath);
+  const cacheCatalog = new CacheCatalog(config.databasePath);
   const orchestrator = new OrchestratorClient(config.orchestratorBaseUrl, config.httpTimeoutMs);
   const mediaIndexer = new MediaIndexerClient(config.mediaIndexerBaseUrl, config.httpTimeoutMs);
   const renderer = new RemotionVideoRenderer(config);
@@ -46,16 +49,24 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
       config.narrationCacheRoot,
       orchestrator,
       config.assetDownloadIdleTimeoutMs,
+      cacheCatalog,
     ),
     new GameplaySourceResolver(
       config.sourceCacheRoot,
       mediaIndexer,
       config.assetDownloadIdleTimeoutMs,
+      cacheCatalog,
     ),
-    new MusicAssetResolver(config.musicCacheRoot, orchestrator, config.assetDownloadIdleTimeoutMs),
-    new ClipProxyPreparer(config),
+    new MusicAssetResolver(
+      config.musicCacheRoot,
+      orchestrator,
+      config.assetDownloadIdleTimeoutMs,
+      cacheCatalog,
+    ),
+    new ClipProxyPreparer(config, cacheCatalog),
     renderer,
     new ProgramAudioProcessor(config),
+    new TemporalDerivativeResolver(config, mediaIndexer, cacheCatalog),
   );
   const worker = new RenderWorker(processor, config.maxQueueSize, config.renderWorkerConcurrency);
   const coordinator = new RenderCoordinator(config, repository, worker, orchestrator, mediaIndexer);
@@ -86,6 +97,7 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
     await server.close();
     await worker.stop();
     repository.close();
+    cacheCatalog.close();
   };
   process.once('SIGINT', () => void shutdown());
   process.once('SIGTERM', () => void shutdown());

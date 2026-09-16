@@ -12,6 +12,13 @@ export const secondsToMicroseconds = (seconds: number): bigint => {
 const nearestFrame = (microseconds: bigint, fps: number): bigint =>
   (microseconds * BigInt(fps) + MICROSECONDS_PER_SECOND / 2n) / MICROSECONDS_PER_SECOND;
 
+export const microsecondsToNearestFrame = (microseconds: number, fps: number): number => {
+  if (!Number.isSafeInteger(microseconds) || microseconds < 0)
+    throw new QuantizationError('invalid_microseconds');
+  if (!Number.isInteger(fps) || fps <= 0) throw new QuantizationError('invalid_fps');
+  return Number(nearestFrame(BigInt(microseconds), fps));
+};
+
 const ceilingFrame = (microseconds: bigint, fps: number): bigint =>
   (microseconds * BigInt(fps) + MICROSECONDS_PER_SECOND - 1n) / MICROSECONDS_PER_SECOND;
 

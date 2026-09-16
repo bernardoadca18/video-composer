@@ -10,11 +10,16 @@ import type { RenderManifest } from '../domain/contracts.js';
 export interface RenderProgress {
   renderedFrames: number;
   encodedFrames: number;
+  renderedDoneIn: number | null;
+  encodedDoneIn: number | null;
+  stitchStage: 'encoding' | 'muxing';
   progress: number;
 }
 
 export interface RenderContext {
   renderId: string;
+  frameRange?: [number, number];
+  proxyMetadata?: Record<string, { durationSeconds: number; width: number; height: number }>;
 }
 
 export interface VideoRenderer {
@@ -87,7 +92,7 @@ export class RemotionVideoRenderer implements VideoRenderer {
         audioBitrate: '192k',
         sampleRate: 48000,
         crf: 18,
-        x264Preset: 'medium',
+        x264Preset: 'fast',
         pixelFormat: 'yuv420p',
         imageFormat: 'png',
         colorSpace: 'bt709',
@@ -96,6 +101,10 @@ export class RemotionVideoRenderer implements VideoRenderer {
         enforceAudioTrack: false,
         muted: true,
         concurrency: this.config.remotionConcurrency,
+        frameRange: context?.frameRange ?? null,
+        mediaCacheSizeInBytes: this.config.remotionMediaCacheBytes,
+        offthreadVideoCacheSizeInBytes: this.config.remotionOffthreadVideoCacheBytes,
+        offthreadVideoThreads: this.config.remotionOffthreadVideoThreads,
         logLevel: 'warn',
         ffmpegOverride: ({ type, args }) => {
           if (type !== 'stitcher') return args;
@@ -114,6 +123,9 @@ export class RemotionVideoRenderer implements VideoRenderer {
           onProgress({
             renderedFrames: value.renderedFrames,
             encodedFrames: value.encodedFrames,
+            renderedDoneIn: value.renderedDoneIn,
+            encodedDoneIn: value.encodedDoneIn,
+            stitchStage: value.stitchStage,
             progress: value.progress,
           }),
       });
@@ -135,7 +147,42 @@ export class RemotionVideoRenderer implements VideoRenderer {
           error_stack: errorStack ? sanitizeDiagnostic(errorStack) : null,
         }),
       );
-      throw new ComposerError('remotion_render_failure', 'Remotion render failed');
+      const targetFrame = Number(/\bframe\s*(?:=|:)?\s*(\d+)/iu.exec(errorMessage)?.[1]);
+      const placement = Number.isInteger(targetFrame)
+        ? manifest.placements.find(
+            (item) =>
+              targetFrame >= item.frame_start &&
+              targetFrame < item.frame_start + item.frame_duration,
+          )
+        : undefined;
+      const videoSource =
+        placement?.source && 'proxy_key' in placement.source ? placement.source : null;
+      const proxy = videoSource ? context?.proxyMetadata?.[videoSource.proxy_key] : undefined;
+      throw new ComposerError('remotion_render_failure', 'Remotion render failed', 500, {
+        cause: error,
+        diagnostics: {
+          target_frame: Number.isInteger(targetFrame) ? targetFrame : null,
+          target_timeline_seconds: Number.isInteger(targetFrame)
+            ? targetFrame / manifest.render_profile.fps
+            : null,
+          placement_id: placement?.id,
+          placement_order: placement?.order,
+          media_id: videoSource?.media_id,
+          source_sha256: videoSource?.sha256,
+          proxy_key: videoSource?.proxy_key,
+          placement_local_frame:
+            placement && Number.isInteger(targetFrame) ? targetFrame - placement.frame_start : null,
+          placement_local_seconds:
+            placement && Number.isInteger(targetFrame)
+              ? (targetFrame - placement.frame_start) / manifest.render_profile.fps
+              : null,
+          proxy_duration_seconds: proxy?.durationSeconds,
+          proxy_width: proxy?.width,
+          proxy_height: proxy?.height,
+          proxy_codec: videoSource ? 'h264' : null,
+          renderer_phase: renderPhase,
+        },
+      });
     }
   }
 }

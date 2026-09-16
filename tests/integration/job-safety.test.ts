@@ -11,7 +11,7 @@ import { RenderJobRepository } from '../../src/jobs/repository.js';
 import type { RenderWorker } from '../../src/jobs/worker.js';
 import { runProcess } from '../../src/media/process.js';
 import type { ProgramAudioProcessor } from '../../src/media/program-audio.js';
-import type { ClipProxyPreparer } from '../../src/media/proxy.js';
+import type { ClipProxyPreparer, ProxyPlacement } from '../../src/media/proxy.js';
 import type { VideoRenderer } from '../../src/remotion/renderer.js';
 import type {
   GameplaySourceResolver,
@@ -19,6 +19,11 @@ import type {
   NarrationAssetResolver,
 } from '../../src/services/asset-resolvers.js';
 import { RenderCoordinator } from '../../src/services/render-coordinator.js';
+import type {
+  DerivativeSourceAsset,
+  EnsuredTemporalDerivative,
+  TemporalDerivativeResolver,
+} from '../../src/services/temporal-derivative-resolver.js';
 import { renderManifest, testConfig, TIMELINE_ID, WORKFLOW_ID } from '../helpers.js';
 
 const repositories: RenderJobRepository[] = [];
@@ -42,6 +47,27 @@ const createJob = (repository: RenderJobRepository, root: string, id: string) =>
     manifestFingerprint: '5'.repeat(64),
     manifest: renderManifest(root),
   });
+
+const createNarration = async (root: string): Promise<string> => {
+  const narrationPath = path.join(root, 'narration.wav');
+  await runProcess(
+    'ffmpeg',
+    [
+      '-v',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:sample_rate=48000:duration=6',
+      '-c:a',
+      'pcm_s16le',
+      '-y',
+      narrationPath,
+    ],
+    'fixture',
+  );
+  return narrationPath;
+};
 
 describe('render job safety', () => {
   it('logs private diagnostics for an unknown preparation error and keeps public state safe', async () => {
@@ -133,6 +159,15 @@ describe('render job safety', () => {
       } as unknown as GameplaySourceResolver,
       {} as MusicAssetResolver,
       {
+        inspectCache: async (placement: (typeof job.manifest.placements)[number]) => ({
+          path: sourcePath,
+          key:
+            'proxy_key' in placement.source ? placement.source.proxy_key : placement.source.sha256,
+          cacheHit: true,
+          durationSeconds: 3,
+          width: 640,
+          height: 360,
+        }),
         prepare: async (_source: string, placement: (typeof job.manifest.placements)[number]) => ({
           path: sourcePath,
           key:
@@ -159,6 +194,151 @@ describe('render job safety', () => {
     expect(repository.get(job.id)?.status).toBe('failed');
     expect(repository.get(job.id)?.errorCategory).toBe('ffprobe_failure');
     await expect(stat(path.join(config.outputRoot, `${job.id}.mp4`))).rejects.toThrow();
+  });
+
+  it('uses temporal derivatives for cold proxy misses without opening full source content', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'composer-derived-cold-'));
+    const config = testConfig(root);
+    const narrationPath = await createNarration(root);
+    const repository = new RenderJobRepository(config.databasePath);
+    repositories.push(repository);
+    const job = createJob(repository, root, '80000000-0000-4000-8000-000000000013');
+    const fullSourceResolve = vi.fn(async () => {
+      throw new Error('full source endpoint must not be opened');
+    });
+    const materialized = new Set<string>();
+    const inspectCache = vi.fn(async (placement: (typeof job.manifest.placements)[number]) => {
+      if (!('proxy_key' in placement.source) || !materialized.has(placement.source.proxy_key)) {
+        return null;
+      }
+      return {
+        path: path.join(root, `${placement.source.proxy_key}.mp4`),
+        key: placement.source.proxy_key,
+        cacheHit: true,
+        durationSeconds: 3,
+        width: 1920,
+        height: 1080,
+      };
+    });
+    const ensure = vi.fn(
+      async (
+        _asset: DerivativeSourceAsset,
+        placement: ProxyPlacement,
+      ): Promise<EnsuredTemporalDerivative> => ({
+        derivative: {
+          id: '90000000-0000-4000-8000-000000000001',
+          identity: placement.source.proxy_key,
+          source_media_id: placement.source.media_id,
+          source_sha256: placement.source.sha256,
+          source_start_microseconds: placement.source.derivative_source_start_microseconds!,
+          source_end_microseconds: placement.source.derivative_source_end_microseconds!,
+          profile_id: 'render_proxy_1080p30_v2',
+          profile_identity: placement.source.proxy_profile_identity!,
+          strategy_version: 'proxy_strategy_v2',
+          status: 'completed',
+          sha256: 'd'.repeat(64),
+          byte_size: 1_024,
+          duration_seconds: 3,
+          width: 1920,
+          height: 1080,
+          fps: 30,
+          codec: 'h264',
+          generation_seconds: 0.1,
+          error: null,
+          content_url: '/temporal-derivatives/id/content',
+        },
+        created: true,
+        cacheHit: false,
+        waitSeconds: 0.1,
+      }),
+    );
+    const derivativeMaterialize = vi.fn(
+      async (_ensured: EnsuredTemporalDerivative, placement: ProxyPlacement) => {
+        materialized.add(placement.source.proxy_key);
+        return {
+          path: path.join(root, `${placement.source.proxy_key}.mp4`),
+          cacheHit: false,
+          byteSize: 1_024,
+          sha256: 'd'.repeat(64),
+        };
+      },
+    );
+    const processor = new RenderJobProcessor(
+      config,
+      repository,
+      {
+        resolve: async () => ({
+          path: narrationPath,
+          cacheHit: true,
+          byteSize: job.manifest.narration.byte_size ?? 1,
+          sha256: job.manifest.narration.sha256,
+        }),
+      } as unknown as NarrationAssetResolver,
+      { resolve: fullSourceResolve } as unknown as GameplaySourceResolver,
+      {} as MusicAssetResolver,
+      { inspectCache } as unknown as ClipProxyPreparer,
+      {
+        render: async () => {
+          throw new Error('bounded stop after preparation');
+        },
+      } as unknown as VideoRenderer,
+      {} as ProgramAudioProcessor,
+      { ensure, materialize: derivativeMaterialize } as unknown as TemporalDerivativeResolver,
+    );
+
+    await processor.process(job.id);
+
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(derivativeMaterialize).toHaveBeenCalledTimes(2);
+    expect(fullSourceResolve).not.toHaveBeenCalled();
+  });
+
+  it('does no source or derivative work when every proxy is already valid', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'composer-derived-warm-'));
+    const config = testConfig(root);
+    const narrationPath = await createNarration(root);
+    const repository = new RenderJobRepository(config.databasePath);
+    repositories.push(repository);
+    const job = createJob(repository, root, '80000000-0000-4000-8000-000000000014');
+    const sourceResolve = vi.fn();
+    const derivativeEnsure = vi.fn();
+    const processor = new RenderJobProcessor(
+      config,
+      repository,
+      {
+        resolve: async () => ({
+          path: narrationPath,
+          cacheHit: true,
+          byteSize: job.manifest.narration.byte_size ?? 1,
+          sha256: job.manifest.narration.sha256,
+        }),
+      } as unknown as NarrationAssetResolver,
+      { resolve: sourceResolve } as unknown as GameplaySourceResolver,
+      {} as MusicAssetResolver,
+      {
+        inspectCache: async (placement: (typeof job.manifest.placements)[number]) => ({
+          path: root,
+          key:
+            'proxy_key' in placement.source ? placement.source.proxy_key : placement.source.sha256,
+          cacheHit: true,
+          durationSeconds: 3,
+          width: 1920,
+          height: 1080,
+        }),
+      } as unknown as ClipProxyPreparer,
+      {
+        render: async () => {
+          throw new Error('bounded stop after preparation');
+        },
+      } as unknown as VideoRenderer,
+      {} as ProgramAudioProcessor,
+      { ensure: derivativeEnsure } as unknown as TemporalDerivativeResolver,
+    );
+
+    await processor.process(job.id);
+
+    expect(sourceResolve).not.toHaveBeenCalled();
+    expect(derivativeEnsure).not.toHaveBeenCalled();
   });
 
   it('requeues interrupted work and removes an invalid final artifact', async () => {

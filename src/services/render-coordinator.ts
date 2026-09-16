@@ -106,6 +106,7 @@ export class RenderCoordinator {
       requestIdentity.contract = 'composer_render_request_v3_program_audio';
     }
     const requestFingerprint = fingerprint(requestIdentity);
+    let persistedIdempotencyKey = idempotencyKey;
     if (idempotencyKey) {
       const existing = this.repository.byIdempotencyKey(idempotencyKey);
       if (existing) {
@@ -116,16 +117,22 @@ export class RenderCoordinator {
             409,
           );
         }
-        if (existing.status === 'completed' && !(await this.completedArtifactIsValid(existing))) {
-          if (!this.worker.hasCapacity) {
-            throw new ComposerError('queue_full', 'Render queue is full', 429);
+        if (existing.renderFingerprint !== built.renderFingerprint) {
+          // The caller request is the same, but an internal versioned render/manifest strategy
+          // changed materially. Preserve the historical job and allow the new render identity.
+          persistedIdempotencyKey = null;
+        } else {
+          if (existing.status === 'completed' && !(await this.completedArtifactIsValid(existing))) {
+            if (!this.worker.hasCapacity) {
+              throw new ComposerError('queue_full', 'Render queue is full', 429);
+            }
+            if (existing.outputPath) await unlink(existing.outputPath).catch(() => undefined);
+            this.repository.requeue(existing.id);
+            this.worker.enqueue(existing.id);
+            return { job: this.repository.get(existing.id)!, created: false };
           }
-          if (existing.outputPath) await unlink(existing.outputPath).catch(() => undefined);
-          this.repository.requeue(existing.id);
-          this.worker.enqueue(existing.id);
-          return { job: this.repository.get(existing.id)!, created: false };
+          return { job: existing, created: false };
         }
-        return { job: existing, created: false };
       }
     }
     const equivalent = this.repository.byRenderFingerprint(built.renderFingerprint);
@@ -153,7 +160,7 @@ export class RenderCoordinator {
       renderProfile: profile.name,
       renderProfileIdentity: profile.identity,
       mode: request.mode,
-      idempotencyKey,
+      idempotencyKey: persistedIdempotencyKey,
       requestFingerprint,
       renderFingerprint: built.renderFingerprint,
       manifestFingerprint: built.manifestFingerprint,

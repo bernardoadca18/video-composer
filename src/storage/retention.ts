@@ -32,6 +32,7 @@ export const cleanupCache = async (
   maximumAgeDays: number,
   maximumBytes: number,
   protectedPaths: ReadonlySet<string>,
+  protectedRoots: readonly string[] = [],
 ): Promise<CleanupResult> => {
   const entries = (await Promise.all(roots.map(files)))
     .flat()
@@ -43,6 +44,7 @@ export const cleanupCache = async (
   for (const item of entries) {
     if (
       protectedPaths.has(item.path) ||
+      protectedRoots.some((root) => item.path.startsWith(`${root}${path.sep}`)) ||
       item.path.endsWith('.lock') ||
       (item.mtimeMs >= cutoff && remainingBytes <= maximumBytes)
     ) {

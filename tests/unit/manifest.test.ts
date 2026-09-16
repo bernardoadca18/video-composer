@@ -26,6 +26,17 @@ describe('render manifest', () => {
     expect(build().manifest.duration_in_frames).toBe(180);
   });
 
+  it('uses the versioned proxy profile and keeps 1080p proxy intent in the manifest', () => {
+    const built = build();
+    const placement = built.manifest.placements[0]!;
+    expect(built.manifest.proxy_strategy_version).toBe('proxy_strategy_v2');
+    expect(placement.source.proxy_profile_identity).toMatch(/^[a-f0-9]{64}$/);
+    expect(placement.source.derivative_source_start_microseconds).toBe(
+      placement.source.source_start_microseconds,
+    );
+    expect(placement.source.proxy_trim_start_frame).toBe(0);
+  });
+
   it('is deterministic and source content participates in identity', () => {
     const first = build();
     const repeated = build();

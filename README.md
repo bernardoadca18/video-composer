@@ -6,8 +6,8 @@ Stage 16 deterministic rendering service. It converts the frozen Orchestrator
 ```text
 ProductionTimeline
   -> validated RenderManifest
-  -> narration/source materialization over trusted HTTP
-  -> exact silent clip proxies
+  -> proxy-first derivative plan over trusted HTTP assets
+  -> coalesced silent, seek-friendly render proxies
   -> static Remotion composition
   -> independently validated atomic MP4
 ```
@@ -111,9 +111,22 @@ Narration is downloaded only from the configured Orchestrator
 size, then atomically rename. Per-key filesystem locks and a second cache check prevent concurrent
 corruption.
 
-Each exact Stage 15 trim becomes a cached H.264/yuv420p constant-30-fps proxy without audio. Its key
-contains source SHA, source microseconds, FPS, codec and proxy strategy. FFprobe validates every new
-or reused proxy.
+The V2 proxy profile (`render_proxy_1080p30_v2`) is content-addressed by every material encoder
+decision: source SHA/range, dimensions, scale/no-upscale policy, FPS, codec/backend, pixel format,
+CRF, preset, GOP/scenecut, color policy and strategy version. For the 1080p profile it generates a
+silent H.264/yuv420p fit-inside proxy at no more than 1920×1080, strips metadata/data streams, and
+uses fixed two-second GOPs. Overlapping or suitably adjacent intervals from one source are coalesced;
+each placement keeps its original source range and a frame-accurate offset into the derivative.
+
+The worker plans and validates proxies before source materialization. A warm hit performs no source
+download; missing derivatives are grouped by source and processed serially. Cache validation uses a
+fast ffprobe path. Source/narration/music hot hits use the durable cache catalog plus stat identity;
+full SHA verification remains mandatory on write, metadata change, suspicious cache state and explicit
+deep validation. Cache access updates LRU recency and active jobs remain protected from cleanup.
+
+Before heavy asset work, the worker calculates a disk plan containing free space, source/proxy/temp,
+Remotion/output allowances and a 10 GiB reserve. A definitely insufficient plan fails as
+`insufficient_disk_capacity` before downloading source media.
 
 `HTTP_TIMEOUT_MS` bounds control-plane requests and the wait for asset response headers.
 `ASSET_DOWNLOAD_IDLE_TIMEOUT_MS` is a separate data-plane inactivity limit: a large transfer may
@@ -180,6 +193,18 @@ per case and an atomic `report.json` with wall time, render factor, peak RSS for
 descendants, and system GPU-memory baseline/peak when `nvidia-smi` is available. GPU memory is
 explicitly system-scoped, so the operator must exclude unrelated GPU work. This tool never changes
 the production `REMOTION_CONCURRENCY` setting.
+
+To reproduce a bounded Remotion incident smoke without starting a full retry, use a durable render
+whose V2 proxies have already been prepared:
+
+```bash
+npm run smoke:window -- --render-id RENDER_ID --frame 2479 --before 60 --after 60
+```
+
+It renders only the selected frame window and reports the frame range, wall time and renderer progress.
+On a Remotion failure, private structured diagnostics identify the frame, timeline time, placement,
+source SHA, proxy key, local placement offset, proxy dimensions/duration and renderer phase; public
+responses stay sanitized.
 
 See [contract details](docs/CONTRACT.md) and [operations](docs/OPERATIONS.md).
 

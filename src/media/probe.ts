@@ -48,10 +48,23 @@ export const mediaDuration = (probe: ProbeResult): number | null => {
   return durations.length ? Math.max(...durations) : null;
 };
 
-export const probeMedia = async (ffprobe: string, filePath: string): Promise<ProbeResult> => {
+const probe = async (
+  ffprobe: string,
+  filePath: string,
+  countFrames: boolean,
+): Promise<ProbeResult> => {
   const result = await runProcess(
     ffprobe,
-    ['-v', 'error', '-count_frames', '-show_streams', '-show_format', '-of', 'json', filePath],
+    [
+      '-v',
+      'error',
+      ...(countFrames ? ['-count_frames'] : []),
+      '-show_streams',
+      '-show_format',
+      '-of',
+      'json',
+      filePath,
+    ],
     'ffprobe_failure',
   );
   try {
@@ -60,6 +73,17 @@ export const probeMedia = async (ffprobe: string, filePath: string): Promise<Pro
     throw new ComposerError('media_validation_failure', 'Invalid ffprobe response');
   }
 };
+
+export const probeMediaFast = async (ffprobe: string, filePath: string): Promise<ProbeResult> =>
+  await probe(ffprobe, filePath, false);
+
+export const probeMediaWithFrameCount = async (
+  ffprobe: string,
+  filePath: string,
+): Promise<ProbeResult> => await probe(ffprobe, filePath, true);
+
+/** @deprecated Prefer the explicit fast or frame-counting probe. */
+export const probeMedia = probeMediaFast;
 
 export const validateNarration = async (
   ffprobe: string,

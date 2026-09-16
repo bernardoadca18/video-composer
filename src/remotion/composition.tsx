@@ -16,9 +16,15 @@ import { PresentationLayers } from './presentation/PresentationLayers.js';
 const GameplayPlacement: React.FC<{
   source: string;
   fit: 'contain';
-}> = ({ source, fit }) => (
+  startFrom: number;
+}> = ({ source, fit, startFrom }) => (
   <AbsoluteFill style={{ backgroundColor: '#000000' }}>
-    <OffthreadVideo muted src={source} style={{ width: '100%', height: '100%', objectFit: fit }} />
+    <OffthreadVideo
+      muted
+      src={source}
+      startFrom={startFrom}
+      style={{ width: '100%', height: '100%', objectFit: fit }}
+    />
   </AbsoluteFill>
 );
 
@@ -118,6 +124,7 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
             <GameplayPlacement
               source={placement.source.proxy_url}
               fit={manifest.render_profile.fit_mode}
+              startFrom={placement.source.proxy_trim_start_frame ?? 0}
             />
           )}
         </Sequence>

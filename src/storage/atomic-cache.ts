@@ -8,6 +8,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import { ComposerError } from '../core/errors.js';
 import { sha256File } from '../core/identity.js';
+import type { CacheCatalog, CacheKind } from './cache-catalog.js';
 
 export interface CachedFile {
   path: string;
@@ -26,6 +27,9 @@ export interface MaterializationOptions {
   idleTimeoutMs: number;
   maximumBytes: number;
   context: MaterializationContext;
+  catalog?: CacheCatalog;
+  cacheKind?: CacheKind;
+  profileIdentity?: string;
 }
 
 class AssetTransferIdleTimeoutError extends Error {
@@ -71,12 +75,25 @@ const validCachedFile = async (
   target: string,
   expectedSha256: string,
   expectedSize: number | null,
+  catalog?: CacheCatalog,
+  cacheKind: CacheKind = 'source',
+  profileIdentity?: string,
 ): Promise<CachedFile | null> => {
   try {
     const details = await stat(target);
     if (!details.isFile() || (expectedSize !== null && details.size !== expectedSize)) return null;
+    if (catalog?.isHotValid(target, expectedSha256, expectedSize)) {
+      return { path: target, cacheHit: true, byteSize: details.size, sha256: expectedSha256 };
+    }
     const actual = await sha256File(target);
     if (actual !== expectedSha256) return null;
+    catalog?.record({
+      cacheKey: target,
+      cacheKind,
+      sha256: actual,
+      byteSize: details.size,
+      ...(profileIdentity ? { profileIdentity } : {}),
+    });
     return { path: target, cacheHit: true, byteSize: details.size, sha256: actual };
   } catch {
     return null;
@@ -92,7 +109,14 @@ export const materializeResponse = async (
 ): Promise<CachedFile> => {
   const lockPath = `${target}.lock`;
   return await withFileLock(lockPath, async () => {
-    const cached = await validCachedFile(target, expectedSha256, expectedSize);
+    const cached = await validCachedFile(
+      target,
+      expectedSha256,
+      expectedSize,
+      options.catalog,
+      options.cacheKind,
+      options.profileIdentity,
+    );
     if (cached) return cached;
     await mkdir(path.dirname(target), { recursive: true });
     await unlink(target).catch(() => undefined);
@@ -178,6 +202,13 @@ export const materializeResponse = async (
       await handle.sync();
       await handle.close();
       await rename(temporary, target);
+      options.catalog?.record({
+        cacheKey: target,
+        cacheKind: options.cacheKind ?? 'source',
+        sha256: actualSha256,
+        byteSize,
+        ...(options.profileIdentity ? { profileIdentity: options.profileIdentity } : {}),
+      });
       return { path: target, cacheHit: false, byteSize, sha256: actualSha256 };
     } catch (error) {
       if (idleTimeout) clearTimeout(idleTimeout);

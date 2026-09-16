@@ -83,6 +83,12 @@ describe('clip proxy integration', () => {
     placement.frame_duration = 60;
     placement.source.source_start_microseconds = 2_000_000;
     placement.source.source_end_microseconds = 4_000_000;
+    placement.source.derivative_source_start_microseconds = 2_000_000;
+    placement.source.derivative_source_end_microseconds = 4_000_000;
+    placement.source.proxy_trim_start_microseconds = 0;
+    placement.source.proxy_trim_end_microseconds = 2_000_000;
+    placement.source.proxy_trim_start_frame = 0;
+    delete placement.source.proxy_profile_identity;
     placement.source.proxy_key = fingerprint({ source: 'blue-trim' });
     const preparer = new ClipProxyPreparer(config);
 
@@ -96,11 +102,58 @@ describe('clip proxy integration', () => {
     expect(repeated.cacheHit).toBe(true);
     expect(video.codec_name).toBe('h264');
     expect(video.pix_fmt).toBe('yuv420p');
+    expect(video.width).toBe(320);
+    expect(video.height).toBe(180);
     expect(rational(video.avg_frame_rate)).toBe(30);
     expect(probe.streams.filter((item) => item.codec_type === 'audio')).toHaveLength(0);
+    expect(probe.streams).toHaveLength(1);
     expect(rgb[2]!).toBeGreaterThan(rgb[0]! + 50);
 
     await writeFile(prepared.path, 'corrupt');
     expect((await preparer.prepare(source, placement)).cacheHit).toBe(false);
   }, 30_000);
+
+  it('caps a 4K source at the render profile dimensions without upscaling smaller inputs', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'composer-proxy-4k-'));
+    const config = testConfig(root);
+    const source = path.join(root, 'source-4k.mp4');
+    await runProcess(
+      'ffmpeg',
+      [
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc2=s=3840x2160:r=30:d=1',
+        '-an',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-pix_fmt',
+        'yuv420p',
+        '-y',
+        source,
+      ],
+      'fixture_generation',
+    );
+    const placement = renderManifest(root).placements[0]!;
+    placement.frame_duration = 30;
+    placement.source.source_start_microseconds = 0;
+    placement.source.source_end_microseconds = 1_000_000;
+    placement.source.derivative_source_start_microseconds = 0;
+    placement.source.derivative_source_end_microseconds = 1_000_000;
+    placement.source.proxy_trim_start_microseconds = 0;
+    placement.source.proxy_trim_end_microseconds = 1_000_000;
+    placement.source.proxy_trim_start_frame = 0;
+    delete placement.source.proxy_profile_identity;
+    placement.source.proxy_key = fingerprint({ source: '4k-trim' });
+
+    const prepared = await new ClipProxyPreparer(config).prepare(source, placement);
+    expect(prepared.width).toBeLessThanOrEqual(1920);
+    expect(prepared.height).toBeLessThanOrEqual(1080);
+    expect(prepared.width).toBe(1920);
+    expect(prepared.height).toBe(1080);
+  }, 60_000);
 });

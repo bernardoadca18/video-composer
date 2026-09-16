@@ -8,7 +8,9 @@ const config = loadConfig();
 const repository = new RenderJobRepository(config.databasePath);
 try {
   const protectedPaths = new Set<string>();
-  for (const job of repository.recoverable()) {
+  const protectedRoots: string[] = [];
+  const recoverable = repository.recoverable();
+  for (const job of recoverable) {
     protectedPaths.add(
       path.join(config.narrationCacheRoot, `${job.manifest.narration.asset_key}.wav`),
     );
@@ -20,12 +22,22 @@ try {
         protectedPaths.add(path.join(config.proxyCacheRoot, `${placement.source.proxy_key}.mp4`));
       }
     }
+    if (job.manifest.schema_version === 'render_manifest_v4') {
+      protectedRoots.push(config.musicCacheRoot, config.programAudioCacheRoot);
+    }
   }
   const result = await cleanupCache(
-    [config.sourceCacheRoot, config.proxyCacheRoot, config.narrationCacheRoot],
+    [
+      config.sourceCacheRoot,
+      config.proxyCacheRoot,
+      config.narrationCacheRoot,
+      config.musicCacheRoot,
+      config.programAudioCacheRoot,
+    ],
     config.sourceCacheMaxAgeDays,
     config.sourceCacheMaxBytes,
     protectedPaths,
+    protectedRoots,
   );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } finally {

@@ -1,6 +1,8 @@
 import type { AppConfig } from '../core/config.js';
 import { fingerprint } from '../core/identity.js';
 import type { RenderProfile } from './profiles.js';
+import { planProxyDerivatives } from './proxy-planner.js';
+import { proxyProfileForRender } from './proxy-profile.js';
 import {
   type MediaAssetMetadata,
   type AudioMixPlan,
@@ -33,6 +35,54 @@ const asNumber = (value: bigint): number => {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new ManifestValidationError('invalid_timeline', 'range');
   return number;
+};
+
+interface PlannableVideoSource {
+  sha256: string;
+  source_start_microseconds: number;
+  source_end_microseconds: number;
+  proxy_key: string;
+  proxy_url: string;
+}
+
+const hasPlannableVideoSource = <T extends { source: object }>(
+  placement: T,
+): placement is T & { source: PlannableVideoSource } => 'proxy_key' in placement.source;
+
+const applyProxyPlan = <T extends { id: string; source: object }>(
+  placements: T[],
+  profile: RenderProfile,
+  config: AppConfig,
+): T[] => {
+  const proxyProfile = proxyProfileForRender(profile);
+  const plan = planProxyDerivatives(
+    placements.filter(hasPlannableVideoSource).map((placement) => ({
+      placementId: placement.id,
+      sourceSha256: placement.source.sha256,
+      sourceStartMicroseconds: placement.source.source_start_microseconds,
+      sourceEndMicroseconds: placement.source.source_end_microseconds,
+    })),
+    proxyProfile,
+  );
+  return placements.map((placement) => {
+    if (!hasPlannableVideoSource(placement)) return placement;
+    const planned = plan.placements.get(placement.id);
+    if (!planned) throw new ManifestValidationError('proxy_plan_invalid', 'Placement is unplanned');
+    return {
+      ...placement,
+      source: {
+        ...placement.source,
+        proxy_key: planned.derivativeKey,
+        proxy_url: `${config.internalAssetBaseUrl}/internal-assets/proxy/${planned.derivativeKey}`,
+        proxy_profile_identity: proxyProfile.identity,
+        derivative_source_start_microseconds: planned.derivativeStartMicroseconds,
+        derivative_source_end_microseconds: planned.derivativeEndMicroseconds,
+        proxy_trim_start_microseconds: planned.trimStartMicroseconds,
+        proxy_trim_end_microseconds: planned.trimEndMicroseconds,
+        proxy_trim_start_frame: planned.trimStartFrame,
+      },
+    };
+  });
 };
 
 const requireTimeline = (
@@ -242,10 +292,11 @@ const buildRenderManifestV1 = (
   if (uniqueAssets.length > config.maxSourceAssets) {
     throw new ManifestValidationError('render_limit', 'Timeline exceeds source asset limit');
   }
+  const plannedPlacements = applyProxyPlan(manifestPlacements, profile, config);
   const manifest = RenderManifestV1Schema.parse({
     schema_version: 'render_manifest_v1',
     composer_strategy_version: 'video_composer_v1',
-    proxy_strategy_version: 'clip_proxy_v1',
+    proxy_strategy_version: 'proxy_strategy_v2',
     workflow_id: timeline.workflow_id,
     production_timeline_id: timeline.id,
     production_timeline_fingerprint: timeline.fingerprint,
@@ -272,7 +323,7 @@ const buildRenderManifestV1 = (
       frame_duration: quantized.durationInFrames,
     },
     source_assets: uniqueAssets,
-    placements: manifestPlacements,
+    placements: plannedPlacements,
     gaps: manifestGaps,
   });
   const manifestFingerprint = fingerprint(manifest);
@@ -485,10 +536,11 @@ const buildRenderManifestV2 = (
   if (uniqueAssets.length > config.maxSourceAssets) {
     throw new ManifestValidationError('render_limit', 'Timeline exceeds source asset limit');
   }
+  const plannedPlacements = applyProxyPlan(manifestPlacements, profile, config);
   const manifest = RenderManifestV2Schema.parse({
     schema_version: 'render_manifest_v2',
     composer_strategy_version: 'video_composer_v2_hybrid_sources',
-    proxy_strategy_version: 'clip_proxy_v1',
+    proxy_strategy_version: 'proxy_strategy_v2',
     workflow_id: timeline.workflow_id,
     production_timeline_id: timeline.id,
     production_timeline_fingerprint: timeline.fingerprint,
@@ -515,7 +567,7 @@ const buildRenderManifestV2 = (
       frame_duration: quantized.durationInFrames,
     },
     source_assets: uniqueAssets,
-    placements: manifestPlacements,
+    placements: plannedPlacements,
     gaps: manifestGaps,
   });
   const manifestFingerprint = fingerprint(manifest);

@@ -26,6 +26,28 @@ Run `npm run cache:cleanup` to enforce age/size limits. Artifacts referenced by 
 are protected. Run `npm run outputs:cleanup` to expire old completed outputs; the job becomes an
 explicit `output_expired` failure rather than claiming a missing file is completed.
 
+The cache catalog records atomic verified entries, byte size, SHA, stat identity, integrity state and
+last access. Normal source hot hits therefore avoid rehashing multi-gigabyte files, but changed or
+suspicious entries are rehashed before reuse. LRU is driven by access time; active/recoverable render
+assets are never eviction candidates.
+
+## Capacity and incident smoke
+
+The worker requires a positive disk plan before source work. It reserves `DISK_SAFETY_RESERVE_BYTES`
+(10 GiB by default) in addition to the predicted missing source bytes, V2 derivative bytes, atomic
+temporary-file allowance, Remotion intermediate allowance and final output allowance. Increase the
+reserve instead of raising static cache ceilings on machines with limited disks.
+
+Use a bounded smoke before a real retry:
+
+```bash
+npm run smoke:window -- --render-id RENDER_ID --frame 2479 --before 60 --after 60
+```
+
+This command is intentionally read-only with respect to production job state: it does not requeue,
+retry, regenerate upstream artifacts or start the full render. It requires the target job's proxies
+to exist and otherwise fails with their keys.
+
 ## Failure handling
 
 Dependency, proxy, Remotion/Chromium, FFmpeg, validation and storage failures have separate public

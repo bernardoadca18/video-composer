@@ -1,5 +1,12 @@
 import { ComposerError } from '../core/errors.js';
-import { type MediaAssetMetadata, MediaAssetMetadataSchema } from '../domain/contracts.js';
+import {
+  type MediaAssetMetadata,
+  MediaAssetMetadataSchema,
+  type TemporalDerivative,
+  TemporalDerivativeEnsureResponseSchema,
+  TemporalDerivativeSchema,
+} from '../domain/contracts.js';
+import type { ProxyProfileSpecification } from '../domain/proxy-profile.js';
 
 type Fetch = typeof fetch;
 
@@ -10,9 +17,10 @@ export class MediaIndexerClient {
     private readonly fetchFn: Fetch = fetch,
   ) {}
 
-  private async request(path: string): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
     try {
       const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+        ...init,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (response.ok) return response;
@@ -69,5 +77,74 @@ export class MediaIndexerClient {
 
   async openContent(mediaId: string, transferSignal: AbortSignal): Promise<Response> {
     return await this.requestAsset(`/media-assets/${mediaId}/content`, transferSignal);
+  }
+
+  async ensureTemporalDerivative(input: {
+    mediaId: string;
+    sourceSha256: string;
+    sourceStartMicroseconds: number;
+    sourceEndMicroseconds: number;
+    profileIdentity: string;
+    profile: ProxyProfileSpecification;
+    waitTimeoutMs: number;
+    pollIntervalMs: number;
+  }): Promise<{ derivative: TemporalDerivative; created: boolean; reusedCompleted: boolean }> {
+    const response = await this.request(`/media-assets/${input.mediaId}/temporal-derivatives`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contract_version: 'temporal_derivative_request_v1',
+        source_sha256: input.sourceSha256,
+        source_start_microseconds: input.sourceStartMicroseconds,
+        source_end_microseconds: input.sourceEndMicroseconds,
+        profile_identity: input.profileIdentity,
+        profile: input.profile,
+      }),
+    });
+    let ensured;
+    try {
+      ensured = TemporalDerivativeEnsureResponseSchema.parse(await response.json());
+    } catch {
+      throw new ComposerError('dependency_contract', 'Invalid temporal derivative response', 502);
+    }
+    const deadline = performance.now() + input.waitTimeoutMs;
+    const reusedCompleted = !ensured.created && ensured.derivative.status === 'completed';
+    let derivative = ensured.derivative;
+    while (derivative.status === 'pending' || derivative.status === 'processing') {
+      if (performance.now() >= deadline) {
+        throw new ComposerError(
+          'derivative_generation_timeout',
+          'Temporal derivative generation timed out',
+          504,
+        );
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, input.pollIntervalMs));
+      const status = await this.request(`/temporal-derivatives/${derivative.id}`);
+      try {
+        derivative = TemporalDerivativeSchema.parse(await status.json());
+      } catch {
+        throw new ComposerError('dependency_contract', 'Invalid temporal derivative status', 502);
+      }
+    }
+    if (
+      derivative.status !== 'completed' ||
+      derivative.sha256 === null ||
+      derivative.byte_size === null ||
+      derivative.content_url === null
+    ) {
+      throw new ComposerError(
+        'derivative_generation_failure',
+        derivative.error ?? 'Temporal derivative generation failed',
+        502,
+      );
+    }
+    return { derivative, created: ensured.created, reusedCompleted };
+  }
+
+  async openTemporalDerivative(
+    derivativeId: string,
+    transferSignal: AbortSignal,
+  ): Promise<Response> {
+    return await this.requestAsset(`/temporal-derivatives/${derivativeId}/content`, transferSignal);
   }
 }

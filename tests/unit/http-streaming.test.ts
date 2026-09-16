@@ -36,7 +36,7 @@ const listen = async (server: Server): Promise<string> => {
 describe('control-plane and asset data-plane timeouts', () => {
   it('times out a control request that hangs before headers', async () => {
     const server = createServer(() => undefined);
-    const client = new MediaIndexerClient(await listen(server), 25);
+    const client = new MediaIndexerClient(await listen(server), 100);
     const started = performance.now();
 
     await expect(client.getMetadata('50000000-0000-4000-8000-000000000001')).rejects.toMatchObject({

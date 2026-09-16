@@ -3,6 +3,7 @@ import { z } from 'zod';
 const Id = z.string().uuid();
 const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const Seconds = z.number().finite().nonnegative();
+const ProxyStrategySchema = z.enum(['clip_proxy_v1', 'proxy_strategy_v2']);
 
 const VideoSourceFields = {
   project_id: Id,
@@ -511,6 +512,41 @@ export const MediaAssetMetadataSchema = z.object({
   height: z.number().int().positive().nullable(),
 });
 
+export const TemporalDerivativeSchema = z.object({
+  id: Id,
+  identity: Sha256,
+  source_media_id: Id,
+  source_sha256: Sha256,
+  source_start_microseconds: z.number().int().nonnegative(),
+  source_end_microseconds: z.number().int().positive(),
+  profile_id: z.string().min(1),
+  profile_identity: Sha256,
+  strategy_version: z.string().min(1),
+  status: z.enum(['pending', 'processing', 'completed', 'failed']),
+  sha256: Sha256.nullable(),
+  byte_size: z.number().int().nonnegative().nullable(),
+  duration_seconds: z.number().finite().positive().nullable(),
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+  fps: z.number().finite().positive().nullable(),
+  codec: z.string().nullable(),
+  generation_seconds: z.number().finite().nonnegative().nullable(),
+  error: z.string().nullable(),
+  content_url: z.string().nullable(),
+});
+
+export const TemporalDerivativeEnsureResponseSchema = z.object({
+  derivative: TemporalDerivativeSchema,
+  job: z.object({
+    id: Id,
+    status: z.enum(['pending', 'processing', 'completed', 'failed']),
+    stage: z.string(),
+    progress: z.number(),
+    error: z.string().nullable(),
+  }),
+  created: z.boolean(),
+});
+
 export const RenderRequestSchema = z.object({
   workflow_id: Id,
   render_profile: z.string().default('youtube_1080p30_v1'),
@@ -525,6 +561,7 @@ export type TimelinePlacement =
   | z.infer<typeof TimelineVideoPlacementV2Schema>
   | z.infer<typeof TimelineImagePlacementV2Schema>;
 export type MediaAssetMetadata = z.infer<typeof MediaAssetMetadataSchema>;
+export type TemporalDerivative = z.infer<typeof TemporalDerivativeSchema>;
 export type RenderRequest = z.infer<typeof RenderRequestSchema>;
 export type PresentationSpec = z.infer<typeof PresentationSpecSchema>;
 export type ComposerRenderInput = z.infer<typeof ComposerRenderInputSchema>;
@@ -581,6 +618,12 @@ const RenderVideoSourceV1Schema = z.object({
   source_end_microseconds: z.number().int().positive(),
   proxy_key: Sha256,
   proxy_url: z.url(),
+  proxy_profile_identity: Sha256.optional(),
+  derivative_source_start_microseconds: z.number().int().nonnegative().optional(),
+  derivative_source_end_microseconds: z.number().int().positive().optional(),
+  proxy_trim_start_microseconds: z.number().int().nonnegative().optional(),
+  proxy_trim_end_microseconds: z.number().int().positive().optional(),
+  proxy_trim_start_frame: z.number().int().nonnegative().optional(),
 });
 
 const RenderVideoSourceV2Schema = RenderVideoSourceV1Schema.extend({
@@ -601,7 +644,7 @@ const RenderImageSourceV2Schema = z.object({
 export const RenderManifestV1Schema = z.object({
   schema_version: z.literal('render_manifest_v1'),
   composer_strategy_version: z.literal('video_composer_v1'),
-  proxy_strategy_version: z.literal('clip_proxy_v1'),
+  proxy_strategy_version: ProxyStrategySchema,
   workflow_id: Id,
   production_timeline_id: Id,
   production_timeline_fingerprint: Sha256,
@@ -632,7 +675,7 @@ export const RenderManifestV1Schema = z.object({
 export const RenderManifestV2Schema = z.object({
   schema_version: z.literal('render_manifest_v2'),
   composer_strategy_version: z.literal('video_composer_v2_hybrid_sources'),
-  proxy_strategy_version: z.literal('clip_proxy_v1'),
+  proxy_strategy_version: ProxyStrategySchema,
   workflow_id: Id,
   production_timeline_id: Id,
   production_timeline_fingerprint: Sha256,
@@ -674,7 +717,7 @@ export const RenderManifestV3Schema = z
   .object({
     schema_version: z.literal('render_manifest_v3'),
     composer_strategy_version: z.literal('video_composer_v3_presentation'),
-    proxy_strategy_version: z.literal('clip_proxy_v1'),
+    proxy_strategy_version: ProxyStrategySchema,
     source_timeline_schema_version: z.enum([
       'production_timeline_schema_v1',
       'production_timeline_schema_v2',

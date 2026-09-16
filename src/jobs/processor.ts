@@ -187,6 +187,7 @@ export class RenderJobProcessor {
         const cached = await this.proxyPreparer.inspectCache?.(
           placement,
           job.manifest.render_profile,
+          { renderId: job.id },
         );
         proxyValidationSeconds += (performance.now() - validationStarted) / 1000;
         if (cached) {
@@ -384,6 +385,7 @@ export class RenderJobProcessor {
           const proxy = await this.proxyPreparer.inspectCache(
             placement,
             job.manifest.render_profile,
+            { renderId: job.id, derivativeId: ensured.derivative.id, required: true },
           );
           proxyValidationSeconds += (performance.now() - validationStarted) / 1000;
           if (!proxy) {

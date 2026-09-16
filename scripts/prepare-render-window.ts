@@ -103,7 +103,9 @@ try {
     const asset = manifest.source_assets.find(
       (item) => item.media_id === placement.source.media_id,
     )!;
-    const cached = await proxies.inspectCache(placement, manifest.render_profile);
+    const cached = await proxies.inspectCache(placement, manifest.render_profile, {
+      renderId: context.renderId,
+    });
     const entry: Record<string, unknown> = {
       placements: placements.filter((item) => item.source.proxy_key === key).map((item) => item.id),
       media_id: asset.media_id,
@@ -119,7 +121,11 @@ try {
     if (!cached) {
       const ensured = await derivatives.ensure(asset, placement, manifest.render_profile);
       const materialized = await derivatives.materialize(ensured, placement);
-      const inspected = await proxies.inspectCache(placement, manifest.render_profile);
+      const inspected = await proxies.inspectCache(placement, manifest.render_profile, {
+        renderId: context.renderId,
+        derivativeId: ensured.derivative.id,
+        required: true,
+      });
       if (!inspected) throw new Error('Downloaded derivative failed proxy inspection');
       Object.assign(entry, {
         derivative: ensured.derivative,

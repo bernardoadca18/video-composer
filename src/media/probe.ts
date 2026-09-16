@@ -8,6 +8,7 @@ const StreamSchema = z.object({
   codec_type: z.string(),
   codec_name: z.string().optional(),
   pix_fmt: z.string().optional(),
+  color_range: z.string().optional(),
   width: z.number().int().optional(),
   height: z.number().int().optional(),
   sample_rate: z.string().optional(),

@@ -6,7 +6,7 @@ export const presentationThemeV1 = {
   captionMaxWidth: 1420,
   caption: {
     fontFamily: 'Arial, Helvetica, sans-serif',
-    fontSize: 48,
+    fontSize: 42,
     fontWeight: 700,
     lineHeight: 1.2,
     color: '#ffffff',

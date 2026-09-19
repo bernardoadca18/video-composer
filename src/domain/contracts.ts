@@ -228,7 +228,7 @@ export const PresentationSpecSchema = z
     strategy_version: z.literal('longform_presentation_v1'),
     profile_id: z.literal('longform_professional_v1'),
     fingerprint: Sha256,
-    captions: CaptionsPresentationSchema,
+    captions: CaptionsPresentationSchema.optional(),
     section_titles: z.array(SectionTitlePresentationSchema).max(100),
     branding: BrandingPresentationSchema,
     transitions: z.array(TransitionPresentationSchema).max(100),

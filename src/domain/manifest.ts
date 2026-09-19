@@ -703,8 +703,11 @@ export function buildRenderManifest(
       'PresentationSpec fingerprint does not match its canonical content',
     );
   }
+  const captionBoundaries = parsedPresentation.captions
+    ? parsedPresentation.captions.cues.flatMap((item) => [item.start_seconds, item.end_seconds])
+    : [];
   const presentationBoundaries = [
-    ...parsedPresentation.captions.cues.flatMap((item) => [item.start_seconds, item.end_seconds]),
+    ...captionBoundaries,
     ...parsedPresentation.section_titles.flatMap((item) => [item.start_seconds, item.end_seconds]),
     ...parsedPresentation.transitions.flatMap((item) => [
       item.boundary_seconds - item.duration_seconds / 2,
@@ -719,31 +722,34 @@ export function buildRenderManifest(
       presentationBoundaries,
       profile.fps,
     );
+    const captionFrames = parsedPresentation.captions
+      ? {
+          policy_version: parsedPresentation.captions.policy_version,
+          preset: parsedPresentation.captions.preset,
+          cues: parsedPresentation.captions.cues.map((item) => {
+            const start = quantized.frameAt(item.start_seconds);
+            const end = quantized.frameAt(item.end_seconds);
+            if (end <= start) {
+              throw new ManifestValidationError(
+                'frame_quantization',
+                'Caption cue collapsed to zero frames',
+              );
+            }
+            return {
+              text: item.text,
+              frame_start: start,
+              frame_duration: end - start,
+              preset: item.preset,
+            };
+          }),
+        }
+      : undefined;
     presentationFrames = {
       schema_version: parsedPresentation.schema_version,
       strategy_version: parsedPresentation.strategy_version,
       profile_id: parsedPresentation.profile_id,
       fingerprint: parsedPresentation.fingerprint,
-      captions: {
-        policy_version: parsedPresentation.captions.policy_version,
-        preset: parsedPresentation.captions.preset,
-        cues: parsedPresentation.captions.cues.map((item) => {
-          const start = quantized.frameAt(item.start_seconds);
-          const end = quantized.frameAt(item.end_seconds);
-          if (end <= start) {
-            throw new ManifestValidationError(
-              'frame_quantization',
-              'Caption cue collapsed to zero frames',
-            );
-          }
-          return {
-            text: item.text,
-            frame_start: start,
-            frame_duration: end - start,
-            preset: item.preset,
-          };
-        }),
-      },
+      captions: captionFrames,
       section_titles: parsedPresentation.section_titles.map((item) => {
         const start = quantized.frameAt(item.start_seconds);
         const end = quantized.frameAt(item.end_seconds);

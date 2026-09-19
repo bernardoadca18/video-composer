@@ -95,6 +95,7 @@ describe('presentation render manifest identity', () => {
 
   it('changes render identity for captions, title, branding and transition changes', () => {
     const base = presentation();
+    expect(base.captions).toBeDefined();
     const render = (input: PresentationSpec) =>
       buildRenderManifest(productionTimeline(), metadata, youtube1080p30V1, 'final', config, input)
         .renderFingerprint;
@@ -106,8 +107,8 @@ describe('presentation render manifest identity', () => {
       withFingerprint({
         ...content(base),
         captions: {
-          ...base.captions,
-          cues: [{ ...base.captions.cues[0]!, text: 'Outra legenda' }],
+          ...base.captions!,
+          cues: [{ ...base.captions!.cues[0]!, text: 'Outra legenda' }],
         },
       }),
       withFingerprint({

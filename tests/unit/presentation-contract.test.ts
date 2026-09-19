@@ -75,12 +75,13 @@ describe('PresentationSpec V1 contract', () => {
         branding: { preset: 'logo_v1', enabled: true, path: '/tmp/logo.png' },
       }),
     ).toThrow();
+    expect(base.captions).toBeDefined();
     expect(() =>
       PresentationSpecSchema.parse({
         ...base,
         captions: {
-          ...base.captions,
-          cues: [{ ...base.captions.cues[0], end_seconds: 0.1 }],
+          ...base.captions!,
+          cues: [{ ...base.captions!.cues[0]!, end_seconds: 0.1 }],
         },
       }),
     ).toThrow();
@@ -88,10 +89,10 @@ describe('PresentationSpec V1 contract', () => {
       PresentationSpecSchema.parse({
         ...base,
         captions: {
-          ...base.captions,
+          ...base.captions!,
           cues: [
-            base.captions.cues[0],
-            { ...base.captions.cues[0], start_seconds: 1.7, end_seconds: 2.2 },
+            base.captions!.cues[0]!,
+            { ...base.captions!.cues[0]!, start_seconds: 1.7, end_seconds: 2.2 },
           ],
         },
       }),
@@ -100,17 +101,18 @@ describe('PresentationSpec V1 contract', () => {
 
   it('has a stable content fingerprint sensitive to word and timing changes', () => {
     const first = presentation();
+    expect(first.captions).toBeDefined();
     const repeated = presentation();
     const changedWord = presentation({
       captions: {
-        ...first.captions,
-        cues: [{ ...first.captions.cues[0], text: 'Uma legenda diferente' }],
+        ...first.captions!,
+        cues: [{ ...first.captions!.cues[0]!, text: 'Uma legenda diferente' }],
       },
     });
     const changedTiming = presentation({
       captions: {
-        ...first.captions,
-        cues: [{ ...first.captions.cues[0], end_seconds: 1.9 }],
+        ...first.captions!,
+        cues: [{ ...first.captions!.cues[0]!, end_seconds: 1.9 }],
       },
     });
     expect(first.fingerprint).toBe(repeated.fingerprint);

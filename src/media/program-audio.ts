@@ -450,7 +450,6 @@ export class ProgramAudioProcessor {
       videoPath,
       audioPath,
       outputPath,
-      plan.duration_seconds,
       plan.output.channels,
     );
   }
@@ -459,18 +458,22 @@ export class ProgramAudioProcessor {
     videoPath: string,
     narrationPath: string,
     outputPath: string,
-    durationSeconds: number,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _durationSeconds: number,
   ): Promise<void> {
-    await this.muxPcm(videoPath, narrationPath, outputPath, durationSeconds, 1);
+    await this.muxPcm(videoPath, narrationPath, outputPath, 1);
   }
 
   private async muxPcm(
     videoPath: string,
     audioPath: string,
     outputPath: string,
-    durationSeconds: number,
     channels: 1 | 2,
   ): Promise<void> {
+    // Video stream is authoritative - never truncate it.
+    // This preserves exact frame count from Remotion render.
+    // Audio duration is handled separately by ensuring it matches video duration
+    // through the audio mix process upstream.
     await runProcess(
       this.config.ffmpegBinary,
       [
@@ -495,8 +498,6 @@ export class ProgramAudioProcessor {
         '48000',
         '-ac',
         String(channels),
-        '-t',
-        n(durationSeconds),
         '-movflags',
         '+faststart',
         outputPath,

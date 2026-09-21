@@ -21,6 +21,13 @@ import type {
 } from '../services/temporal-derivative-resolver.js';
 import type { RenderJobRepository } from './repository.js';
 import { createDiskPlan, requireDiskCapacity } from '../storage/disk-plan.js';
+import {
+  preserveCandidate,
+  preserveVideoOnly,
+  markValidationFailed,
+  markCompleted,
+  cleanupIntermediateRecovery,
+} from '../storage/recovery-artifacts.js';
 
 interface ActivePreparationOperation {
   preparationStep: string;
@@ -501,6 +508,15 @@ export class RenderJobProcessor {
         },
         { renderId: job.id, proxyMetadata },
       );
+
+      // Preserve video-only artifact after successful Remotion render
+      await preserveVideoOnly(this.config, job.id, temporaryVideo, {
+        render_id: job.id,
+        manifest_fingerprint: job.manifestFingerprint,
+        render_fingerprint: job.renderFingerprint,
+        created_at: new Date().toISOString(),
+      });
+
       if (job.manifest.schema_version === 'render_manifest_v4') {
         if (!programAudioResult) {
           throw new ComposerError('program_mix_failed', 'Program master is unavailable');
@@ -519,12 +535,26 @@ export class RenderJobProcessor {
           job.manifest.duration_seconds,
         );
       }
+
+      // Preserve candidate MP4 after successful mux
+      await preserveCandidate(this.config, job.id, temporaryOutput, {
+        render_id: job.id,
+        manifest_fingerprint: job.manifestFingerprint,
+        render_fingerprint: job.renderFingerprint,
+        created_at: new Date().toISOString(),
+      });
+
       const renderSeconds = (performance.now() - renderStarted) / 1000;
       this.repository.updateProgress(job.id, 'validating', 0.92, job.totalFrames);
       const validationStarted = performance.now();
       const output = await validateOutput(this.config, temporaryOutput, job.manifest);
       const validationSeconds = (performance.now() - validationStarted) / 1000;
       await rename(temporaryOutput, finalOutput);
+
+      // Mark recovery as completed and clean up intermediate artifacts
+      await markCompleted(this.config, job.id);
+      await cleanupIntermediateRecovery(this.config, job.id);
+
       const totalSeconds = (performance.now() - totalStarted) / 1000;
       this.repository.complete(
         job.id,
@@ -620,10 +650,35 @@ export class RenderJobProcessor {
         }),
       );
     } catch (error) {
-      await unlink(temporaryOutput).catch(() => undefined);
-      await unlink(temporaryVideo).catch(() => undefined);
-      await unlink(finalOutput).catch(() => undefined);
+      // Check if render completed - if so, preserve artifacts
       const failureState = this.repository.get(job.id);
+      const renderCompleted = failureState?.framesRendered === job.totalFrames;
+
+      if (renderCompleted) {
+        // Mark validation failure but preserve artifacts
+        const safe = publicError(error);
+        await markValidationFailed(this.config, job.id, {
+          category: safe.category,
+          message: safe.message,
+        });
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'validation_failed_artifact_preserved',
+            render_id: job.id,
+            workflow_id: job.workflowId,
+            error_category: safe.category,
+            error_message: safe.message,
+            recovery_path: `/data/recovery/${job.id}`,
+          }),
+        );
+      } else {
+        // Pre-render failure: clean up temporary files
+        await unlink(temporaryOutput).catch(() => undefined);
+        await unlink(temporaryVideo).catch(() => undefined);
+        await unlink(finalOutput).catch(() => undefined);
+      }
+
       const safe = publicError(error);
       const internal = internalError(error);
       const elapsedMs = Math.round(performance.now() - totalStarted);

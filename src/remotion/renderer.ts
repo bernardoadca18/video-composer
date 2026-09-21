@@ -110,10 +110,10 @@ export class RemotionVideoRenderer implements VideoRenderer {
           if (type !== 'stitcher') return args;
           const output = args.at(-1);
           if (!output) return args;
+          // Do NOT use -t with decimal duration - it can truncate frames.
+          // The video duration is authoritative and derived from duration_in_frames / fps.
           return [
             ...args.slice(0, -1),
-            '-t',
-            manifest.duration_seconds.toFixed(6),
             '-pix_fmt',
             'yuv420p',
             output,

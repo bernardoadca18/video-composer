@@ -4,7 +4,7 @@ import type { AppConfig } from '../core/config.js';
 import { ComposerError } from '../core/errors.js';
 import { sha256File } from '../core/identity.js';
 import type { RenderManifest } from '../domain/contracts.js';
-import { mediaDuration, probeMedia, rational } from './probe.js';
+import { mediaDuration, probeMediaWithFrameCount, rational } from './probe.js';
 
 export interface ValidatedOutput {
   sha256: string;
@@ -20,6 +20,35 @@ export interface ValidatedOutput {
   audioChannels: number;
 }
 
+export interface ValidationDiagnostics {
+  expected_frame_count: number;
+  actual_frame_count: number | null;
+  frame_delta: number | null;
+  expected_duration_seconds: number;
+  actual_duration_seconds: number | null;
+  duration_delta_seconds: number | null;
+  duration_tolerance_seconds: number;
+  expected_fps: number;
+  actual_fps: number | null;
+  video_codec: string | null;
+  pixel_format: string | null;
+  width: number | null;
+  height: number | null;
+  audio_codec: string | null;
+  audio_sample_rate: number | null;
+  audio_channels: number | null;
+}
+
+const logValidationDiagnostics = (diagnostics: ValidationDiagnostics): void => {
+  console.info(
+    JSON.stringify({
+      level: 'error',
+      event: 'output_validation_diagnostics',
+      ...diagnostics,
+    }),
+  );
+};
+
 export const validateOutput = async (
   config: AppConfig,
   filePath: string,
@@ -29,7 +58,8 @@ export const validateOutput = async (
   if (!details?.isFile() || details.size <= 0) {
     throw new ComposerError('output_validation_failure', 'Rendered output is missing');
   }
-  const probe = await probeMedia(config.ffprobeBinary, filePath);
+  // Use frame-counting probe for accurate validation
+  const probe = await probeMediaWithFrameCount(config.ffprobeBinary, filePath);
   const videos = probe.streams.filter((item) => item.codec_type === 'video');
   const audios = probe.streams.filter((item) => item.codec_type === 'audio');
   const video = videos[0];
@@ -38,6 +68,27 @@ export const validateOutput = async (
   const fps = rational(video?.avg_frame_rate ?? video?.r_frame_rate);
   const frameCount = video?.nb_frames ? Number(video.nb_frames) : null;
   const tolerance = 1 / manifest.render_profile.fps + 0.005;
+
+  // Prepare diagnostics for logging
+  const diagnostics: ValidationDiagnostics = {
+    expected_frame_count: manifest.duration_in_frames,
+    actual_frame_count: frameCount,
+    frame_delta: frameCount !== null ? frameCount - manifest.duration_in_frames : null,
+    expected_duration_seconds: manifest.duration_seconds,
+    actual_duration_seconds: duration,
+    duration_delta_seconds: duration !== null ? duration - manifest.duration_seconds : null,
+    duration_tolerance_seconds: tolerance,
+    expected_fps: manifest.render_profile.fps,
+    actual_fps: fps,
+    video_codec: video?.codec_name ?? null,
+    pixel_format: video?.pix_fmt ?? null,
+    width: video?.width ?? null,
+    height: video?.height ?? null,
+    audio_codec: audio?.codec_name ?? null,
+    audio_sample_rate: audio?.sample_rate ? Number(audio.sample_rate) : null,
+    audio_channels: audio?.channels ?? null,
+  };
+
   const mismatches: string[] = [];
   if (videos.length !== 1) mismatches.push('video_stream_count');
   if (audios.length !== 1) mismatches.push('audio_stream_count');
@@ -67,12 +118,16 @@ export const validateOutput = async (
   if (frameCount !== null && frameCount !== manifest.duration_in_frames) {
     mismatches.push('frame_count');
   }
+
   if (mismatches.length > 0 || !video || !audio || duration === null || fps === null) {
+    // Always log detailed diagnostics on validation failure
+    logValidationDiagnostics(diagnostics);
     throw new ComposerError(
       'output_validation_failure',
       `Rendered MP4 profile mismatch: ${mismatches.join(',')}`,
     );
   }
+
   return {
     sha256: await sha256File(filePath),
     byteSize: details.size,

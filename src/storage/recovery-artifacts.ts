@@ -13,6 +13,25 @@ export interface RecoveryMetadata {
     category: string;
     message: string;
   };
+  validation_diagnostics?: {
+    expected_frame_count: number;
+    actual_frame_count: number | null;
+    frame_delta: number | null;
+    expected_duration_seconds: number;
+    actual_duration_seconds: number | null;
+    duration_delta_seconds: number | null;
+    duration_tolerance_seconds: number;
+    expected_fps: number;
+    actual_fps: number | null;
+    video_codec: string | null;
+    pixel_format: string | null;
+    width: number | null;
+    height: number | null;
+    audio_codec: string | null;
+    audio_sample_rate: number | null;
+    audio_channels: number | null;
+    mismatches?: string[];
+  };
 }
 
 const RECOVERY_DIR = 'recovery';
@@ -181,7 +200,9 @@ export const cleanupIntermediateRecovery = async (
 ): Promise<void> => {
   const dir = getRenderRecoveryDir(config, renderId);
   const videoOnlyPath = path.join(dir, 'video-only.mp4');
+  const candidatePath = path.join(dir, 'candidate.mp4');
   await unlink(videoOnlyPath).catch(() => undefined);
+  await unlink(candidatePath).catch(() => undefined);
 };
 
 // TTL-based cleanup for old recovery artifacts

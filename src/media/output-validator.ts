@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 
 import type { AppConfig } from '../core/config.js';
-import { ComposerError } from '../core/errors.js';
+import { ComposerError, type InternalErrorDiagnostics } from '../core/errors.js';
 import { sha256File } from '../core/identity.js';
 import type { RenderManifest } from '../domain/contracts.js';
 import { mediaDuration, probeMediaWithFrameCount, rational } from './probe.js';
@@ -37,6 +37,7 @@ export interface ValidationDiagnostics {
   audio_codec: string | null;
   audio_sample_rate: number | null;
   audio_channels: number | null;
+  mismatches?: string[];
 }
 
 const logValidationDiagnostics = (diagnostics: ValidationDiagnostics): void => {
@@ -66,8 +67,11 @@ export const validateOutput = async (
   const audio = audios[0];
   const duration = mediaDuration(probe);
   const fps = rational(video?.avg_frame_rate ?? video?.r_frame_rate);
-  const frameCount = video?.nb_frames ? Number(video.nb_frames) : null;
   const tolerance = 1 / manifest.render_profile.fps + 0.005;
+
+  // Use nb_read_frames preferentially for authoritative frame count
+  const frameCountFromRead = video?.nb_read_frames ? Number(video.nb_read_frames) : null;
+  const frameCount = frameCountFromRead ?? (video?.nb_frames ? Number(video.nb_frames) : null);
 
   // Prepare diagnostics for logging
   const diagnostics: ValidationDiagnostics = {
@@ -118,13 +122,21 @@ export const validateOutput = async (
   if (frameCount !== null && frameCount !== manifest.duration_in_frames) {
     mismatches.push('frame_count');
   }
+  // When exact frame count is required but not available, fail closed
+  if (frameCount === null) {
+    mismatches.push('frame_count_unavailable');
+  }
 
   if (mismatches.length > 0 || !video || !audio || duration === null || fps === null) {
+    // Include mismatches in diagnostics
+    diagnostics.mismatches = mismatches;
     // Always log detailed diagnostics on validation failure
     logValidationDiagnostics(diagnostics);
     throw new ComposerError(
       'output_validation_failure',
       `Rendered MP4 profile mismatch: ${mismatches.join(',')}`,
+      500,
+      { diagnostics: diagnostics as unknown as InternalErrorDiagnostics },
     );
   }
 

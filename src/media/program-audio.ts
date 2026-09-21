@@ -446,10 +446,13 @@ export class ProgramAudioProcessor {
     outputPath: string,
     plan: AudioMixPlan,
   ): Promise<void> {
+    // Calculate quantized video duration from frame count
+    const videoDurationSeconds = plan.duration_seconds;
     await this.muxPcm(
       videoPath,
       audioPath,
       outputPath,
+      videoDurationSeconds,
       plan.output.channels,
     );
   }
@@ -458,22 +461,21 @@ export class ProgramAudioProcessor {
     videoPath: string,
     narrationPath: string,
     outputPath: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _durationSeconds: number,
+    durationSeconds: number,
   ): Promise<void> {
-    await this.muxPcm(videoPath, narrationPath, outputPath, 1);
+    await this.muxPcm(videoPath, narrationPath, outputPath, durationSeconds, 1);
   }
 
   private async muxPcm(
     videoPath: string,
     audioPath: string,
     outputPath: string,
+    videoDurationSeconds: number,
     channels: 1 | 2,
   ): Promise<void> {
     // Video stream is authoritative - never truncate it.
+    // Audio is padded/trimmed to match quantized video duration.
     // This preserves exact frame count from Remotion render.
-    // Audio duration is handled separately by ensuring it matches video duration
-    // through the audio mix process upstream.
     await runProcess(
       this.config.ffmpegBinary,
       [
@@ -490,6 +492,10 @@ export class ProgramAudioProcessor {
         '1:a:0',
         '-c:v',
         'copy',
+        '-filter_complex',
+        `[1:a]atrim=0:${n(videoDurationSeconds)},apad=whole_dur=0:${n(videoDurationSeconds)},aformat=sample_rates=48000:channel_layouts=${channels === 2 ? 'stereo' : 'mono'}[a]`,
+        '-map',
+        '[a]',
         '-c:a',
         'aac',
         '-b:a',

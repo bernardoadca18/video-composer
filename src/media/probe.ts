@@ -17,6 +17,7 @@ const StreamSchema = z.object({
   r_frame_rate: z.string().optional(),
   duration: z.string().optional(),
   nb_frames: z.string().optional(),
+  nb_read_frames: z.string().optional(),
 });
 
 const ProbeSchema = z.object({

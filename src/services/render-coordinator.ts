@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, unlink } from 'node:fs/promises';
+import { copyFile, mkdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { MediaIndexerClient } from '../clients/media-indexer.js';
@@ -13,6 +13,11 @@ import { resolveRenderProfile, UnknownRenderProfileError } from '../domain/profi
 import { validateOutput } from '../media/output-validator.js';
 import type { RenderJob, RenderJobRepository } from '../jobs/repository.js';
 import type { RenderWorker } from '../jobs/worker.js';
+import {
+  canReuseCandidate,
+  cleanupRecoveryArtifacts,
+  markCompleted,
+} from '../storage/recovery-artifacts.js';
 
 export interface EnsureRenderResult {
   job: RenderJob;
@@ -178,12 +183,40 @@ export class RenderCoordinator {
     let recovered = 0;
     for (const job of this.repository.recoverable()) {
       const expectedOutput = path.join(this.config.outputRoot, `${job.id}.mp4`);
+
+      // First check for reusable recovery artifacts
+      const candidateReuse = await canReuseCandidate(this.config, job.id, job.manifestFingerprint);
+      if (candidateReuse.reusable) {
+        try {
+          const output = await validateOutput(this.config, candidateReuse.path, job.manifest);
+          await copyFile(candidateReuse.path, expectedOutput);
+          await markCompleted(this.config, job.id);
+          this.repository.complete(
+            job.id,
+            expectedOutput,
+            { ...output, mimeType: 'video/mp4', filename: `${job.id}.mp4` },
+            {
+              recoveredAfterRestart: true,
+              composerStrategyVersion: job.manifest.composer_strategy_version,
+              remotionVersion: '4.0.516',
+              reusedCandidate: true,
+            },
+          );
+          recovered += 1;
+          continue;
+        } catch {
+          // Candidate failed validation, fall through to requeue
+          await cleanupRecoveryArtifacts(this.config, job.id);
+        }
+      }
+
+      // Check if expected output already exists and is valid
       try {
         const output = await validateOutput(this.config, expectedOutput, job.manifest);
         this.repository.complete(
           job.id,
           expectedOutput,
-          { ...output },
+          { ...output, mimeType: 'video/mp4', filename: `${job.id}.mp4` },
           {
             recoveredAfterRestart: true,
             composerStrategyVersion: job.manifest.composer_strategy_version,

@@ -8,6 +8,7 @@ import { ComposerError, publicError } from '../core/errors.js';
 import { RenderRequestSchema } from '../domain/contracts.js';
 import { renderProfiles } from '../domain/profiles.js';
 import type { RenderJob } from '../jobs/repository.js';
+import { validateOutput } from '../media/output-validator.js';
 import type { RenderCoordinator } from '../services/render-coordinator.js';
 import { sendControlledFile } from './files.js';
 
@@ -121,6 +122,43 @@ export const buildServer = (context: ServerContext): FastifyInstance => {
       'video/mp4',
       `${id}.mp4`,
     );
+  });
+
+  server.post('/v1/renders/:id/revalidate', async (request, reply) => {
+    const { id } = IdParams.parse(request.params);
+    const job = context.coordinator.get(id);
+    if (!job) return await reply.code(404).send({ error: 'render_not_found' });
+    if (job.status !== 'completed') {
+      return await reply.code(409).send({ error: 'render_not_completed' });
+    }
+    if (!job.outputPath) {
+      return await reply.code(410).send({ error: 'output_expired', message: 'Output no longer available' });
+    }
+
+    const output = await validateOutput(context.config, job.outputPath, job.manifest);
+    const previousSha256 = job.output?.sha256;
+    const currentSha256 = output.sha256;
+    const isValid = previousSha256 === currentSha256;
+
+    return {
+      id: job.id,
+      valid: isValid,
+      previous_sha256: previousSha256,
+      current_sha256: currentSha256,
+      output: {
+        sha256: currentSha256,
+        byte_size: output.byteSize,
+        duration_seconds: output.durationSeconds,
+        frame_count: output.frameCount,
+        width: output.width,
+        height: output.height,
+        fps: output.fps,
+        video_codec: output.videoCodec,
+        audio_codec: output.audioCodec,
+        audio_sample_rate: output.audioSampleRate,
+        audio_channels: output.audioChannels,
+      },
+    };
   });
 
   server.get('/internal-assets/narration/:key', async (request, reply) => {

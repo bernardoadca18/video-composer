@@ -743,7 +743,7 @@ export function buildRenderManifest(
             };
           }),
         }
-      : undefined;
+      : null;
     presentationFrames = {
       schema_version: parsedPresentation.schema_version,
       strategy_version: parsedPresentation.strategy_version,

@@ -100,7 +100,7 @@ export class OrchestratorClient {
     try {
       return schema.parse(await response.json());
     } catch {
-      throw new ComposerError('dependency_contract', 'Invalid Orchestrator response', 502);
+      throw new ComposerError('dependency_contract', 'Invalid Orchestrator response', 422);
     }
   }
 }

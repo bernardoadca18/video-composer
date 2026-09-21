@@ -156,6 +156,47 @@ describe('presentation render manifest identity', () => {
     ).toThrow(/fingerprint/);
   });
 
+  it('accepts presentation with captions null for faceless profiles', () => {
+    const input = withFingerprint({
+      schema_version: 'presentation_spec_v1',
+      strategy_version: 'longform_presentation_v1',
+      profile_id: 'longform_professional_v1',
+      captions: null,
+      section_titles: [],
+      branding: {
+        preset: 'branding_disabled_v1',
+        enabled: false,
+      },
+      transitions: [],
+    });
+    const result = buildRenderManifest(
+      productionTimeline(),
+      metadata,
+      youtube1080p30V1,
+      'final',
+      config,
+      input,
+    );
+    expect(result.manifest.schema_version).toBe('render_manifest_v3');
+    expect(result.manifest.presentation.captions).toBeNull();
+  });
+
+  it('accepts presentation with captions object for normal profiles', () => {
+    const input = presentation();
+    expect(input.captions).toBeDefined();
+    const result = buildRenderManifest(
+      productionTimeline(),
+      metadata,
+      youtube1080p30V1,
+      'final',
+      config,
+      input,
+    );
+    expect(result.manifest.schema_version).toBe('render_manifest_v3');
+    expect(result.manifest.presentation.captions).not.toBeNull();
+    expect(result.manifest.presentation.captions!.cues.length).toBeGreaterThan(0);
+  });
+
   it('rejects a transition whose fade-in collapses to zero frames', () => {
     const input = presentation({
       transitions: [

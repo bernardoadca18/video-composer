@@ -19,7 +19,7 @@ export const PresentationLayers: React.FC<{
   <>
     <Transitions transitions={presentation.transitions} />
     <SectionTitles titles={presentation.section_titles} />
-    <Captions cues={presentation.captions.cues} />
+    <Captions cues={presentation.captions?.cues ?? []} />
     <Branding branding={presentation.branding} />
   </>
 );

@@ -228,7 +228,7 @@ export const PresentationSpecSchema = z
     strategy_version: z.literal('longform_presentation_v1'),
     profile_id: z.literal('longform_professional_v1'),
     fingerprint: Sha256,
-    captions: CaptionsPresentationSchema.optional(),
+    captions: CaptionsPresentationSchema.nullable().optional(),
     section_titles: z.array(SectionTitlePresentationSchema).max(100),
     branding: BrandingPresentationSchema,
     transitions: z.array(TransitionPresentationSchema).max(100),
@@ -469,7 +469,8 @@ const RenderPresentationSchema = z
             .strict(),
         ),
       })
-      .strict(),
+      .strict()
+      .nullable(),
     section_titles: z.array(
       z
         .object({
@@ -786,8 +787,9 @@ export const RenderManifestV3Schema = z
   .strict()
   .superRefine((value, context) => {
     const duration = value.duration_in_frames;
+    const captionCues = value.presentation.captions?.cues ?? [];
     for (const [collection, items] of [
-      ['captions', value.presentation.captions.cues],
+      ['captions', captionCues],
       ['section_titles', value.presentation.section_titles],
     ] as const) {
       items.forEach((item, index) => {
@@ -823,7 +825,38 @@ export const RenderManifestV4Schema = z
     presentation: RenderPresentationSchema.nullable(),
     audio_mix_plan: AudioMixPlanSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const duration = value.duration_in_frames;
+    const captionCues = value.presentation?.captions?.cues ?? [];
+    for (const [collection, items] of [
+      ['captions', captionCues],
+      ['section_titles', value.presentation?.section_titles ?? []],
+    ] as const) {
+      items.forEach((item, index) => {
+        if (item.frame_start + item.frame_duration > duration) {
+          context.addIssue({
+            code: 'custom',
+            message: `${collection} item exceeds render duration`,
+            path: ['presentation', collection, index],
+          });
+        }
+      });
+    }
+    (value.presentation?.transitions ?? []).forEach((item, index) => {
+      if (
+        item.frame_start >= item.boundary_frame ||
+        item.frame_start + item.duration_frames > duration ||
+        item.boundary_frame >= item.frame_start + item.duration_frames
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Transition has an invalid frame range',
+          path: ['presentation', 'transitions', index],
+        });
+      }
+    });
+  });
 
 export const RenderManifestSchema = z.union([
   RenderManifestV1Schema,

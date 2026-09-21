@@ -82,7 +82,7 @@ describe('presentation render manifest identity', () => {
     );
     expect(result.manifest.schema_version).toBe('render_manifest_v3');
     expect(result.manifest.duration_in_frames).toBe(180);
-    expect(result.manifest.presentation.captions.cues[0]).toMatchObject({
+    expect(result.manifest.presentation.captions!.cues[0]).toMatchObject({
       frame_start: 6,
       frame_duration: 48,
     });

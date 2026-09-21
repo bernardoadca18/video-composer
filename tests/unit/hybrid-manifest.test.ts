@@ -156,7 +156,7 @@ describe('hybrid render manifest', () => {
     expect(result.manifest.placements[1]).toMatchObject({
       presentation: { policy_version: 'static_image_presentation_v1' },
     });
-    expect(result.manifest.presentation.captions.cues).toHaveLength(1);
+    expect(result.manifest.presentation.captions!.cues).toHaveLength(1);
   });
 
   it.each([

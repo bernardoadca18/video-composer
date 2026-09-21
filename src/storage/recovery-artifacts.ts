@@ -107,6 +107,7 @@ export const markValidationFailed = async (
   config: AppConfig,
   renderId: string,
   error: { category: string; message: string },
+  validationDiagnostics?: RecoveryMetadata['validation_diagnostics'],
 ): Promise<void> => {
   const existing = await loadRecoveryMetadata(config, renderId);
   if (!existing) return;
@@ -114,6 +115,7 @@ export const markValidationFailed = async (
     ...existing,
     stage: 'validation_failed',
     error,
+    ...(validationDiagnostics ? { validation_diagnostics: validationDiagnostics } : {}),
   });
 };
 

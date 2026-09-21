@@ -445,25 +445,24 @@ export class ProgramAudioProcessor {
     audioPath: string,
     outputPath: string,
     plan: AudioMixPlan,
+    durationInFrames: number,
+    fps: number,
   ): Promise<void> {
-    // Calculate quantized video duration from frame count
-    const videoDurationSeconds = plan.duration_seconds;
-    await this.muxPcm(
-      videoPath,
-      audioPath,
-      outputPath,
-      videoDurationSeconds,
-      plan.output.channels,
-    );
+    // Calculate quantized video duration from frame count (authoritative)
+    const videoDurationSeconds = durationInFrames / fps;
+    await this.muxPcm(videoPath, audioPath, outputPath, videoDurationSeconds, plan.output.channels);
   }
 
   async muxNarration(
     videoPath: string,
     narrationPath: string,
     outputPath: string,
-    durationSeconds: number,
+    durationInFrames: number,
+    fps: number,
   ): Promise<void> {
-    await this.muxPcm(videoPath, narrationPath, outputPath, durationSeconds, 1);
+    // Calculate quantized video duration from frame count (authoritative)
+    const videoDurationSeconds = durationInFrames / fps;
+    await this.muxPcm(videoPath, narrationPath, outputPath, videoDurationSeconds, 1);
   }
 
   private async muxPcm(
@@ -476,6 +475,7 @@ export class ProgramAudioProcessor {
     // Video stream is authoritative - never truncate it.
     // Audio is padded/trimmed to match quantized video duration.
     // This preserves exact frame count from Remotion render.
+    // Note: Only map the filtered audio stream [a], not the raw audio stream.
     await runProcess(
       this.config.ffmpegBinary,
       [
@@ -488,12 +488,10 @@ export class ProgramAudioProcessor {
         audioPath,
         '-map',
         '0:v:0',
-        '-map',
-        '1:a:0',
         '-c:v',
         'copy',
         '-filter_complex',
-        `[1:a]atrim=0:${n(videoDurationSeconds)},apad=whole_dur=0:${n(videoDurationSeconds)},aformat=sample_rates=48000:channel_layouts=${channels === 2 ? 'stereo' : 'mono'}[a]`,
+        `[1:a]atrim=0:${n(videoDurationSeconds)},apad=whole_dur=${n(videoDurationSeconds)},aformat=sample_rates=48000:channel_layouts=${channels === 2 ? 'stereo' : 'mono'}[a]`,
         '-map',
         '[a]',
         '-c:a',

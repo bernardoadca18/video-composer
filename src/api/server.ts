@@ -1,3 +1,4 @@
+import { copyFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -8,8 +9,16 @@ import { ComposerError, publicError } from '../core/errors.js';
 import { RenderRequestSchema } from '../domain/contracts.js';
 import { renderProfiles } from '../domain/profiles.js';
 import type { RenderJob } from '../jobs/repository.js';
+import type { ValidationDiagnostics } from '../media/output-validator.js';
 import { validateOutput } from '../media/output-validator.js';
 import type { RenderCoordinator } from '../services/render-coordinator.js';
+import {
+  canReuseCandidate,
+  canReuseVideoOnly,
+  cleanupIntermediateRecovery,
+  markCompleted,
+  saveRecoveryMetadata,
+} from '../storage/recovery-artifacts.js';
 import { sendControlledFile } from './files.js';
 
 const IdParams = z.object({ id: z.string().uuid() });
@@ -128,37 +137,183 @@ export const buildServer = (context: ServerContext): FastifyInstance => {
     const { id } = IdParams.parse(request.params);
     const job = context.coordinator.get(id);
     if (!job) return await reply.code(404).send({ error: 'render_not_found' });
-    if (job.status !== 'completed') {
-      return await reply.code(409).send({ error: 'render_not_completed' });
-    }
-    if (!job.outputPath) {
-      return await reply.code(410).send({ error: 'output_expired', message: 'Output no longer available' });
+
+    // Handle failed jobs - attempt recovery from preserved candidate
+    if (job.status === 'failed') {
+      const candidateReuse = await canReuseCandidate(
+        context.config,
+        job.id,
+        job.manifestFingerprint,
+      );
+
+      if (!candidateReuse.reusable) {
+        // Check if video-only exists (would need re-mux)
+        const videoOnlyCheck = await canReuseVideoOnly(
+          context.config,
+          job.id,
+          job.renderFingerprint,
+        );
+
+        if (videoOnlyCheck.reusable) {
+          return await reply.code(409).send({
+            error: 'remux_required',
+            message: 'Video-only artifact exists but requires re-mux. Use retry endpoint.',
+            has_video_only: true,
+          });
+        }
+
+        return await reply.code(409).send({
+          error: 'recovery_artifact_unavailable',
+          message: 'No compatible recovery artifact available for revalidation',
+        });
+      }
+
+      // Candidate exists and fingerprint matches - validate and potentially promote
+      try {
+        const output = await validateOutput(context.config, candidateReuse.path, job.manifest);
+        const finalOutputPath = path.join(context.config.outputRoot, `${id}.mp4`);
+
+        // Promote candidate to final output
+        await copyFile(candidateReuse.path, finalOutputPath);
+        await markCompleted(context.config, job.id);
+
+        // Update job in repository
+        context.coordinator.completeJob(
+          job.id,
+          finalOutputPath,
+          {
+            sha256: output.sha256,
+            byteSize: output.byteSize,
+            durationSeconds: output.durationSeconds,
+            width: output.width,
+            height: output.height,
+            fps: output.fps,
+            frameCount: output.frameCount,
+            videoCodec: output.videoCodec,
+            audioCodec: output.audioCodec,
+            audioSampleRate: output.audioSampleRate,
+            audioChannels: output.audioChannels,
+            mimeType: 'video/mp4',
+            filename: `${job.id}.mp4`,
+          },
+          {
+            promoted_from_candidate: true,
+            revalidated_at: new Date().toISOString(),
+          },
+        );
+
+        // Cleanup recovery artifacts after successful promotion
+        await cleanupIntermediateRecovery(context.config, job.id);
+
+        return {
+          id: job.id,
+          status: 'completed',
+          profile_valid: true,
+          promoted: true,
+          output: {
+            sha256: output.sha256,
+            byte_size: output.byteSize,
+            duration_seconds: output.durationSeconds,
+            frame_count: output.frameCount,
+            width: output.width,
+            height: output.height,
+            fps: output.fps,
+            video_codec: output.videoCodec,
+            audio_codec: output.audioCodec,
+            audio_sample_rate: output.audioSampleRate,
+            audio_channels: output.audioChannels,
+          },
+        };
+      } catch (error) {
+        // Candidate validation failed - persist diagnostics and return error
+        if (error instanceof ComposerError && error.diagnostics) {
+          const diagnostics = error.diagnostics as unknown as ValidationDiagnostics;
+          await saveRecoveryMetadata(context.config, job.id, {
+            render_id: job.id,
+            manifest_fingerprint: job.manifestFingerprint,
+            render_fingerprint: job.renderFingerprint,
+            created_at: new Date().toISOString(),
+            stage: 'validation_failed',
+            error: { category: error.category, message: error.message },
+            validation_diagnostics: diagnostics,
+          });
+
+          return await reply.code(422).send({
+            id: job.id,
+            status: 'failed',
+            profile_valid: false,
+            promoted: false,
+            error: { category: error.category, message: error.message },
+            diagnostics: diagnostics,
+          });
+        }
+        throw error;
+      }
     }
 
-    const output = await validateOutput(context.config, job.outputPath, job.manifest);
-    const previousSha256 = job.output?.sha256;
-    const currentSha256 = output.sha256;
-    const isValid = previousSha256 === currentSha256;
+    // Handle completed jobs - re-audit existing output
+    if (job.status === 'completed') {
+      if (!job.outputPath) {
+        return await reply
+          .code(410)
+          .send({ error: 'output_expired', message: 'Output no longer available' });
+      }
 
-    return {
-      id: job.id,
-      valid: isValid,
-      previous_sha256: previousSha256,
-      current_sha256: currentSha256,
-      output: {
-        sha256: currentSha256,
-        byte_size: output.byteSize,
-        duration_seconds: output.durationSeconds,
-        frame_count: output.frameCount,
-        width: output.width,
-        height: output.height,
-        fps: output.fps,
-        video_codec: output.videoCodec,
-        audio_codec: output.audioCodec,
-        audio_sample_rate: output.audioSampleRate,
-        audio_channels: output.audioChannels,
-      },
-    };
+      let output;
+      let profileValid = false;
+      let validationError = null;
+
+      try {
+        output = await validateOutput(context.config, job.outputPath, job.manifest);
+        profileValid = true;
+      } catch (error) {
+        if (error instanceof ComposerError) {
+          validationError = {
+            category: error.category,
+            message: error.message,
+            diagnostics: error.diagnostics as unknown as ValidationDiagnostics,
+          };
+        } else {
+          throw error;
+        }
+      }
+
+      const previousSha256 = job.output?.sha256 as string | undefined;
+      const currentSha256 = output?.sha256;
+      const contentUnchanged =
+        previousSha256 && currentSha256 ? previousSha256 === currentSha256 : null;
+
+      return {
+        id: job.id,
+        status: 'completed',
+        profile_valid: profileValid,
+        content_unchanged: contentUnchanged,
+        previous_sha256: previousSha256 ?? null,
+        current_sha256: currentSha256 ?? null,
+        output: output
+          ? {
+              sha256: currentSha256,
+              byte_size: output.byteSize,
+              duration_seconds: output.durationSeconds,
+              frame_count: output.frameCount,
+              width: output.width,
+              height: output.height,
+              fps: output.fps,
+              video_codec: output.videoCodec,
+              audio_codec: output.audioCodec,
+              audio_sample_rate: output.audioSampleRate,
+              audio_channels: output.audioChannels,
+            }
+          : null,
+        error: validationError,
+      };
+    }
+
+    // Job is in a state that doesn't support revalidation
+    return await reply.code(409).send({
+      error: 'invalid_job_state',
+      message: `Job status '${job.status}' does not support revalidation`,
+    });
   });
 
   server.get('/internal-assets/narration/:key', async (request, reply) => {

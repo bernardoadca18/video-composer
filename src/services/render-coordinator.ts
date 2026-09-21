@@ -178,6 +178,15 @@ export class RenderCoordinator {
     return { job, created: true };
   }
 
+  completeJob(
+    id: string,
+    outputPath: string,
+    output: Record<string, unknown>,
+    metrics: Record<string, unknown>,
+  ): void {
+    this.repository.complete(id, outputPath, output, metrics);
+  }
+
   async recover(): Promise<number> {
     await mkdir(this.config.outputRoot, { recursive: true });
     let recovered = 0;

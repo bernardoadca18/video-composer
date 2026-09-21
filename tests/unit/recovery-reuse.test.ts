@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -15,8 +15,6 @@ import {
   cleanupIntermediateRecovery,
   loadRecoveryMetadata,
   markCompleted,
-  preserveCandidate,
-  preserveVideoOnly,
   saveRecoveryMetadata,
 } from '../../src/storage/recovery-artifacts.js';
 import { testConfig, TIMELINE_ID, WORKFLOW_ID, PROJECT_ID, SESSION_ID, MEDIA_ID, AUDIO_SHA, MEDIA_SHA } from '../helpers.js';
@@ -32,6 +30,7 @@ const createTestConfig = async (): Promise<{ config: AppConfig; cleanup: () => P
   };
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const createTestManifest = (root: string): RenderManifestV1 =>
   buildRenderManifest(
     {

@@ -29,9 +29,7 @@ import {
   cleanupIntermediateRecovery,
   canReuseCandidate,
   canReuseVideoOnly,
-  loadRecoveryMetadata,
   saveRecoveryMetadata,
-  cleanupRecoveryArtifacts,
 } from '../storage/recovery-artifacts.js';
 import type { RecoveryMetadata } from '../storage/recovery-artifacts.js';
 
@@ -79,26 +77,35 @@ export class RenderJobProcessor {
         const validated = await validateOutput(this.config, candidateReuse.path, job.manifest);
         await copyFile(candidateReuse.path, finalOutput);
         await markCompleted(this.config, job.id);
-        this.repository.complete(job.id, finalOutput, {
-          sha256: validated.sha256,
-          byteSize: validated.byteSize,
-          durationSeconds: validated.durationSeconds,
-          width: validated.width,
-          height: validated.height,
-          fps: validated.fps,
-          frameCount: validated.frameCount,
-          videoCodec: validated.videoCodec,
-          audioCodec: validated.audioCodec,
-          audioSampleRate: validated.audioSampleRate,
-          audioChannels: validated.audioChannels,
-          mimeType: 'video/mp4',
-          filename: `${job.id}.mp4`,
-        }, {});
+        this.repository.complete(
+          job.id,
+          finalOutput,
+          {
+            sha256: validated.sha256,
+            byteSize: validated.byteSize,
+            durationSeconds: validated.durationSeconds,
+            width: validated.width,
+            height: validated.height,
+            fps: validated.fps,
+            frameCount: validated.frameCount,
+            videoCodec: validated.videoCodec,
+            audioCodec: validated.audioCodec,
+            audioSampleRate: validated.audioSampleRate,
+            audioChannels: validated.audioChannels,
+            mimeType: 'video/mp4',
+            filename: `${job.id}.mp4`,
+          },
+          {},
+        );
+        // Clean up intermediate artifacts after successful promotion
+        await cleanupIntermediateRecovery(this.config, job.id);
         return;
       } catch (error) {
-        // Candidate failed validation - save diagnostics and fall through to re-render
+        // Candidate failed validation - save diagnostics but PRESERVE video-only
+        // Only delete the candidate, not video-only (might be reusable for remux)
         if (error instanceof ComposerError && error.diagnostics) {
-          const diagnostics = error.diagnostics as unknown as RecoveryMetadata['validation_diagnostics'];
+          const diagnostics =
+            error.diagnostics as unknown as RecoveryMetadata['validation_diagnostics'];
           await saveRecoveryMetadata(this.config, job.id, {
             render_id: job.id,
             manifest_fingerprint: job.manifestFingerprint,
@@ -112,7 +119,8 @@ export class RenderJobProcessor {
             ...(diagnostics ? { validation_diagnostics: diagnostics } : {}),
           });
         }
-        await cleanupRecoveryArtifacts(this.config, job.id);
+        // Delete only the candidate, preserve video-only for potential remux
+        await unlink(candidateReuse.path).catch(() => undefined);
       }
     }
 
@@ -548,39 +556,39 @@ export class RenderJobProcessor {
         temporaryVideoPath = videoOnlyReuse.path;
       } else {
         // No reusable artifact, proceed with Remotion render
-      await this.renderer.render(
-        job.manifest,
-        temporaryVideo,
-        (progress) => {
-          if (timeToFirstRenderFrameSeconds === null && progress.renderedFrames > 0) {
-            timeToFirstRenderFrameSeconds = (performance.now() - renderStarted) / 1000;
-          }
-          remotionProgress = {
-            renderedDoneIn: progress.renderedDoneIn,
-            encodedDoneIn: progress.encodedDoneIn,
-            stitchStage: progress.stitchStage,
-          };
-          const percent = Math.floor(progress.progress * 100);
-          if (percent >= lastPersisted + 2 || percent === 100) {
-            lastPersisted = percent;
-            this.repository.updateProgress(
-              job.id,
-              'rendering',
-              0.1 + progress.progress * 0.8,
-              Math.max(progress.renderedFrames, progress.encodedFrames),
-            );
-          }
-        },
-        { renderId: job.id, proxyMetadata },
-      );
+        await this.renderer.render(
+          job.manifest,
+          temporaryVideo,
+          (progress) => {
+            if (timeToFirstRenderFrameSeconds === null && progress.renderedFrames > 0) {
+              timeToFirstRenderFrameSeconds = (performance.now() - renderStarted) / 1000;
+            }
+            remotionProgress = {
+              renderedDoneIn: progress.renderedDoneIn,
+              encodedDoneIn: progress.encodedDoneIn,
+              stitchStage: progress.stitchStage,
+            };
+            const percent = Math.floor(progress.progress * 100);
+            if (percent >= lastPersisted + 2 || percent === 100) {
+              lastPersisted = percent;
+              this.repository.updateProgress(
+                job.id,
+                'rendering',
+                0.1 + progress.progress * 0.8,
+                Math.max(progress.renderedFrames, progress.encodedFrames),
+              );
+            }
+          },
+          { renderId: job.id, proxyMetadata },
+        );
 
-      // Preserve video-only artifact after successful Remotion render
-      await preserveVideoOnly(this.config, job.id, temporaryVideoPath, {
-        render_id: job.id,
-        manifest_fingerprint: job.manifestFingerprint,
-        render_fingerprint: job.renderFingerprint,
-        created_at: new Date().toISOString(),
-      });
+        // Preserve video-only artifact after successful Remotion render
+        await preserveVideoOnly(this.config, job.id, temporaryVideoPath, {
+          render_id: job.id,
+          manifest_fingerprint: job.manifestFingerprint,
+          render_fingerprint: job.renderFingerprint,
+          created_at: new Date().toISOString(),
+        });
       } // end of else block for video-only reuse check
 
       if (job.manifest.schema_version === 'render_manifest_v4') {
@@ -592,13 +600,16 @@ export class RenderJobProcessor {
           programAudioResult.path,
           temporaryOutput,
           job.manifest.audio_mix_plan,
+          job.manifest.duration_in_frames,
+          job.manifest.render_profile.fps,
         );
       } else {
         await this.programAudio.muxNarration(
           temporaryVideoPath,
           narration.path,
           temporaryOutput,
-          job.manifest.duration_seconds,
+          job.manifest.duration_in_frames,
+          job.manifest.render_profile.fps,
         );
       }
 
@@ -723,10 +734,17 @@ export class RenderJobProcessor {
       if (renderCompleted) {
         // Mark validation failure but preserve artifacts
         const safe = publicError(error);
-        await markValidationFailed(this.config, job.id, {
-          category: safe.category,
-          message: safe.message,
-        });
+        const diagnostics =
+          error instanceof ComposerError ? error.diagnostics : undefined;
+        await markValidationFailed(
+          this.config,
+          job.id,
+          {
+            category: safe.category,
+            message: safe.message,
+          },
+          diagnostics as RecoveryMetadata['validation_diagnostics'] | undefined,
+        );
         console.error(
           JSON.stringify({
             level: 'error',

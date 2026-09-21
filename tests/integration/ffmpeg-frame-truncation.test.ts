@@ -1,29 +1,34 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, rm, unlink } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
+// Detect FFmpeg/FFprobe synchronously at module scope so skipIf works correctly
+let ffmpegAvailable = false;
+let ffprobeAvailable = false;
+
+try {
+  execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+  ffmpegAvailable = true;
+} catch {
+  ffmpegAvailable = false;
+}
+
+try {
+  execFileSync('ffprobe', ['-version'], { stdio: 'ignore' });
+  ffprobeAvailable = true;
+} catch {
+  ffprobeAvailable = false;
+}
+
+const shouldRunTests = ffmpegAvailable && ffprobeAvailable;
+
 describe('FFmpeg Frame Truncation Integration', () => {
   let workDir: string;
-  let ffmpegAvailable = false;
-  let ffprobeAvailable = false;
 
   beforeAll(async () => {
-    try {
-      execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
-      ffmpegAvailable = true;
-    } catch {
-      ffmpegAvailable = false;
-    }
-    try {
-      execFileSync('ffprobe', ['-version'], { stdio: 'ignore' });
-      ffprobeAvailable = true;
-    } catch {
-      ffprobeAvailable = false;
-    }
-
     workDir = path.join(tmpdir(), `frame-truncation-test-${Date.now()}`);
     await mkdir(workDir, { recursive: true });
   });
@@ -35,7 +40,18 @@ describe('FFmpeg Frame Truncation Integration', () => {
   const getFrameCount = (filePath: string): number => {
     const output = execFileSync(
       'ffprobe',
-      ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', filePath],
+      [
+        '-v',
+        'error',
+        '-count_frames',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=nb_read_frames',
+        '-of',
+        'csv=p=0',
+        filePath,
+      ],
       { encoding: 'utf-8' },
     );
     const count = parseInt(output.trim(), 10);
@@ -54,7 +70,26 @@ describe('FFmpeg Frame Truncation Integration', () => {
     return parseFloat(output.trim());
   };
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should generate exactly 31 frames at 30fps', () => {
+  const getAudioStreamCount = (filePath: string): number => {
+    const output = execFileSync(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+        '-select_streams',
+        'a',
+        '-show_entries',
+        'stream=index',
+        '-of',
+        'csv=p=0',
+        filePath,
+      ],
+      { encoding: 'utf-8' },
+    );
+    return output.trim().split('\n').filter(Boolean).length;
+  };
+
+  it.skipIf(!shouldRunTests)('should generate exactly 31 frames at 30fps', () => {
     const outputPath = path.join(workDir, 'test-31-frames.mp4');
 
     // Generate test video with exactly 31 frames at 30fps
@@ -62,10 +97,14 @@ describe('FFmpeg Frame Truncation Integration', () => {
     execFileSync(
       'ffmpeg',
       [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1.033333:size=320x240:rate=30',
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
         '-y',
         outputPath,
       ],
@@ -80,7 +119,7 @@ describe('FFmpeg Frame Truncation Integration', () => {
     expect(duration).toBeCloseTo(31 / 30, 3);
   });
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should prove -t flag truncates frames during encode', () => {
+  it.skipIf(!shouldRunTests)('should prove -t flag truncates frames during encode', () => {
     const inputPath = path.join(workDir, 'input-31-frames.mp4');
     const truncatedPath = path.join(workDir, 'truncated-by-t.mp4');
 
@@ -88,10 +127,14 @@ describe('FFmpeg Frame Truncation Integration', () => {
     execFileSync(
       'ffmpeg',
       [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1.033333:size=320x240:rate=30',
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
         '-y',
         inputPath,
       ],
@@ -105,10 +148,14 @@ describe('FFmpeg Frame Truncation Integration', () => {
     execFileSync(
       'ffmpeg',
       [
-        '-i', inputPath,
-        '-t', '1.0',  // Truncate to 1.0 seconds
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
+        '-i',
+        inputPath,
+        '-t',
+        '1.0', // Truncate to 1.0 seconds
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
         '-y',
         truncatedPath,
       ],
@@ -122,7 +169,7 @@ describe('FFmpeg Frame Truncation Integration', () => {
     expect(truncatedFrames).toBeLessThan(originalFrames);
   });
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should prove -c:v copy preserves frames without -t', () => {
+  it.skipIf(!shouldRunTests)('should prove -c:v copy preserves frames without -t', () => {
     const inputPath = path.join(workDir, 'input-copy-test.mp4');
     const copiedPath = path.join(workDir, 'copied-no-t.mp4');
 
@@ -130,10 +177,14 @@ describe('FFmpeg Frame Truncation Integration', () => {
     execFileSync(
       'ffmpeg',
       [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1.033333:size=320x240:rate=30',
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
         '-y',
         inputPath,
       ],
@@ -144,154 +195,171 @@ describe('FFmpeg Frame Truncation Integration', () => {
     expect(originalFrames).toBe(31);
 
     // Copy video stream without -t flag - should preserve all frames
-    execFileSync(
-      'ffmpeg',
-      [
-        '-i', inputPath,
-        '-c:v', 'copy',
-        '-y',
-        copiedPath,
-      ],
-      { stdio: 'pipe' },
-    );
+    execFileSync('ffmpeg', ['-i', inputPath, '-c:v', 'copy', '-y', copiedPath], { stdio: 'pipe' });
 
     const copiedFrames = getFrameCount(copiedPath);
     expect(copiedFrames).toBe(31);
     expect(copiedFrames).toBe(originalFrames);
   });
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should handle audio shorter than video without truncating video', () => {
-    const videoPath = path.join(workDir, 'video-31-frames.mp4');
-    const audioPath = path.join(workDir, 'audio-short.mp3');
-    const muxedPath = path.join(workDir, 'muxed-short-audio.mp4');
+  it.skipIf(!shouldRunTests)(
+    'should handle audio shorter than video without truncating video',
+    () => {
+      const videoPath = path.join(workDir, 'video-31-frames.mp4');
+      const audioPath = path.join(workDir, 'audio-short.m4a');
+      const muxedPath = path.join(workDir, 'muxed-short-audio.mp4');
 
-    // Generate video with 31 frames at 30fps
-    execFileSync(
-      'ffmpeg',
-      [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        '-y',
-        videoPath,
-      ],
-      { stdio: 'pipe' },
-    );
+      // Generate video with 31 frames at 30fps
+      execFileSync(
+        'ffmpeg',
+        [
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=1.033333:size=320x240:rate=30',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-y',
+          videoPath,
+        ],
+        { stdio: 'pipe' },
+      );
 
-    // Generate audio shorter than video (0.5 seconds = 15 frames worth)
-    execFileSync(
-      'ffmpeg',
-      [
-        '-f', 'lavfi',
-        '-i', 'sine=frequency=440:duration=0.5',
-        '-c:a', 'aac',
-        '-y',
-        audioPath,
-      ],
-      { stdio: 'pipe' },
-    );
+      // Generate audio shorter than video (0.5 seconds = 15 frames worth)
+      execFileSync(
+        'ffmpeg',
+        ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.5', '-c:a', 'aac', '-y', audioPath],
+        { stdio: 'pipe' },
+      );
 
-    const originalVideoFrames = getFrameCount(videoPath);
-    expect(originalVideoFrames).toBe(31);
+      const originalVideoFrames = getFrameCount(videoPath);
+      expect(originalVideoFrames).toBe(31);
 
-    // Mux with quantized video duration, padding audio
-    // Video duration = 31/30 = 1.033333 seconds
-    const videoDuration = 31 / 30;
+      // Mux with quantized video duration, padding audio
+      // Video duration = 31/30 = 1.033333 seconds
+      const videoDuration = 31 / 30;
 
-    execFileSync(
-      'ffmpeg',
-      [
-        '-i', videoPath,
-        '-i', audioPath,
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-c:v', 'copy',
-        '-filter_complex', `[1:a]atrim=0:${videoDuration.toFixed(6)},apad=whole_dur=0:${videoDuration.toFixed(6)}[a]`,
-        '-map', '[a]',
-        '-c:a', 'aac',
-        '-y',
-        muxedPath,
-      ],
-      { stdio: 'pipe' },
-    );
+      execFileSync(
+        'ffmpeg',
+        [
+          '-i',
+          videoPath,
+          '-i',
+          audioPath,
+          '-map',
+          '0:v:0',
+          '-c:v',
+          'copy',
+          '-filter_complex',
+          `[1:a]atrim=0:${videoDuration.toFixed(6)},apad=whole_dur=${videoDuration.toFixed(6)}[a]`,
+          '-map',
+          '[a]',
+          '-c:a',
+          'aac',
+          '-y',
+          muxedPath,
+        ],
+        { stdio: 'pipe' },
+      );
 
-    const muxedVideoFrames = getFrameCount(muxedPath);
-    expect(muxedVideoFrames).toBe(31);
-    expect(muxedVideoFrames).toBe(originalVideoFrames);
-  });
+      const muxedVideoFrames = getFrameCount(muxedPath);
+      expect(muxedVideoFrames).toBe(31);
+      expect(muxedVideoFrames).toBe(originalVideoFrames);
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should handle audio longer than video without truncating video', () => {
-    const videoPath = path.join(workDir, 'video-31-frames-long.mp4');
-    const audioPath = path.join(workDir, 'audio-long.mp3');
-    const muxedPath = path.join(workDir, 'muxed-long-audio.mp4');
+      // Verify exactly ONE audio stream
+      const audioStreams = getAudioStreamCount(muxedPath);
+      expect(audioStreams).toBe(1);
+    },
+  );
 
-    // Generate video with 31 frames at 30fps
-    execFileSync(
-      'ffmpeg',
-      [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        '-y',
-        videoPath,
-      ],
-      { stdio: 'pipe' },
-    );
+  it.skipIf(!shouldRunTests)(
+    'should handle audio longer than video without truncating video',
+    () => {
+      const videoPath = path.join(workDir, 'video-31-frames-long.mp4');
+      const audioPath = path.join(workDir, 'audio-long.m4a');
+      const muxedPath = path.join(workDir, 'muxed-long-audio.mp4');
 
-    // Generate audio longer than video (2.0 seconds)
-    execFileSync(
-      'ffmpeg',
-      [
-        '-f', 'lavfi',
-        '-i', 'sine=frequency=440:duration=2.0',
-        '-c:a', 'aac',
-        '-y',
-        audioPath,
-      ],
-      { stdio: 'pipe' },
-    );
+      // Generate video with 31 frames at 30fps
+      execFileSync(
+        'ffmpeg',
+        [
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=1.033333:size=320x240:rate=30',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-y',
+          videoPath,
+        ],
+        { stdio: 'pipe' },
+      );
 
-    const originalVideoFrames = getFrameCount(videoPath);
-    expect(originalVideoFrames).toBe(31);
+      // Generate audio longer than video (2.0 seconds)
+      execFileSync(
+        'ffmpeg',
+        ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2.0', '-c:a', 'aac', '-y', audioPath],
+        { stdio: 'pipe' },
+      );
 
-    // Mux with quantized video duration, trimming audio
-    const videoDuration = 31 / 30;
+      const originalVideoFrames = getFrameCount(videoPath);
+      expect(originalVideoFrames).toBe(31);
 
-    execFileSync(
-      'ffmpeg',
-      [
-        '-i', videoPath,
-        '-i', audioPath,
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-c:v', 'copy',
-        '-filter_complex', `[1:a]atrim=0:${videoDuration.toFixed(6)},apad=whole_dur=0:${videoDuration.toFixed(6)}[a]`,
-        '-map', '[a]',
-        '-c:a', 'aac',
-        '-y',
-        muxedPath,
-      ],
-      { stdio: 'pipe' },
-    );
+      // Mux with quantized video duration, trimming audio
+      const videoDuration = 31 / 30;
 
-    const muxedVideoFrames = getFrameCount(muxedPath);
-    expect(muxedVideoFrames).toBe(31);
-    expect(muxedVideoFrames).toBe(originalVideoFrames);
-  });
+      execFileSync(
+        'ffmpeg',
+        [
+          '-i',
+          videoPath,
+          '-i',
+          audioPath,
+          '-map',
+          '0:v:0',
+          '-c:v',
+          'copy',
+          '-filter_complex',
+          `[1:a]atrim=0:${videoDuration.toFixed(6)},apad=whole_dur=${videoDuration.toFixed(6)}[a]`,
+          '-map',
+          '[a]',
+          '-c:a',
+          'aac',
+          '-y',
+          muxedPath,
+        ],
+        { stdio: 'pipe' },
+      );
 
-  it.skipIf(!ffmpegAvailable || !ffprobeAvailable)('should use nb_read_frames for accurate frame counting', () => {
+      const muxedVideoFrames = getFrameCount(muxedPath);
+      expect(muxedVideoFrames).toBe(31);
+      expect(muxedVideoFrames).toBe(originalVideoFrames);
+
+      // Verify exactly ONE audio stream
+      const audioStreams = getAudioStreamCount(muxedPath);
+      expect(audioStreams).toBe(1);
+    },
+  );
+
+  it.skipIf(!shouldRunTests)('should use nb_read_frames for accurate frame counting', () => {
     const videoPath = path.join(workDir, 'frame-count-test.mp4');
 
     // Generate video with exactly 31 frames
     execFileSync(
       'ffmpeg',
       [
-        '-f', 'lavfi',
-        '-i', 'testsrc=duration=1.033333:size=320x240:rate=30',
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1.033333:size=320x240:rate=30',
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
         '-y',
         videoPath,
       ],
@@ -301,12 +369,25 @@ describe('FFmpeg Frame Truncation Integration', () => {
     // Count frames using -count_frames (nb_read_frames)
     const output = execFileSync(
       'ffprobe',
-      ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames', '-of', 'json', videoPath],
+      [
+        '-v',
+        'error',
+        '-count_frames',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=nb_read_frames',
+        '-of',
+        'json',
+        videoPath,
+      ],
       { encoding: 'utf-8' },
     );
 
-    const result = JSON.parse(output);
-    const nbReadFrames = parseInt(result.streams[0].nb_read_frames, 10);
+    const result = JSON.parse(output) as { streams: Array<{ nb_read_frames: string }> };
+    const stream = result.streams[0];
+    if (!stream) throw new Error('No video stream found');
+    const nbReadFrames = parseInt(stream.nb_read_frames, 10);
 
     expect(nbReadFrames).toBe(31);
   });

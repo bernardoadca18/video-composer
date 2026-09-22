@@ -34,17 +34,31 @@ export interface RecoveryMetadata {
   };
 }
 
-const RECOVERY_DIR = 'recovery';
-
-const getRecoveryDir = (config: AppConfig): string => path.join(config.dataRoot, RECOVERY_DIR);
+const getRecoveryDir = (config: AppConfig): string => config.recoveryRoot;
 
 const getRenderRecoveryDir = (config: AppConfig, renderId: string): string =>
   path.join(getRecoveryDir(config), renderId);
 
 export const ensureRecoveryDir = async (config: AppConfig, renderId: string): Promise<string> => {
   const dir = getRenderRecoveryDir(config, renderId);
-  await mkdir(dir, { recursive: true });
-  return dir;
+  try {
+    await mkdir(dir, { recursive: true });
+    return dir;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const exceptionName = error instanceof Error ? error.constructor.name : 'UnknownError';
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'recovery_directory_creation_failed',
+        render_id: renderId,
+        recovery_path: dir,
+        exception_name: exceptionName,
+        exception_message: errorMessage,
+      }),
+    );
+    throw error;
+  }
 };
 
 export const saveRecoveryMetadata = async (
@@ -76,15 +90,40 @@ export const preserveVideoOnly = async (
   renderId: string,
   videoPath: string,
   metadata: Omit<RecoveryMetadata, 'stage'>,
-): Promise<string> => {
+): Promise<{ success: boolean; recoveryPath: string; error?: Error }> => {
   const dir = await ensureRecoveryDir(config, renderId);
   const targetPath = path.join(dir, 'video-only.mp4');
-  await copyFile(videoPath, targetPath);
-  await saveRecoveryMetadata(config, renderId, {
-    ...metadata,
-    stage: 'video_rendered',
-  });
-  return targetPath;
+  try {
+    await copyFile(videoPath, targetPath);
+    await saveRecoveryMetadata(config, renderId, {
+      ...metadata,
+      stage: 'video_rendered',
+    });
+    console.info(
+      JSON.stringify({
+        level: 'info',
+        event: 'video_only_preserved',
+        render_id: renderId,
+        source_path: videoPath,
+        recovery_path: targetPath,
+      }),
+    );
+    return { success: true, recoveryPath: targetPath };
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'video_only_preservation_failed',
+        render_id: renderId,
+        source_path: videoPath,
+        recovery_path: targetPath,
+        exception_name: err.constructor.name,
+        exception_message: err.message,
+      }),
+    );
+    return { success: false, recoveryPath: targetPath, error: err };
+  }
 };
 
 export const preserveCandidate = async (
@@ -92,15 +131,40 @@ export const preserveCandidate = async (
   renderId: string,
   candidatePath: string,
   metadata: Omit<RecoveryMetadata, 'stage'>,
-): Promise<string> => {
+): Promise<{ success: boolean; recoveryPath: string; error?: Error }> => {
   const dir = await ensureRecoveryDir(config, renderId);
   const targetPath = path.join(dir, 'candidate.mp4');
-  await copyFile(candidatePath, targetPath);
-  await saveRecoveryMetadata(config, renderId, {
-    ...metadata,
-    stage: 'mux_completed',
-  });
-  return targetPath;
+  try {
+    await copyFile(candidatePath, targetPath);
+    await saveRecoveryMetadata(config, renderId, {
+      ...metadata,
+      stage: 'mux_completed',
+    });
+    console.info(
+      JSON.stringify({
+        level: 'info',
+        event: 'candidate_preserved',
+        render_id: renderId,
+        source_path: candidatePath,
+        recovery_path: targetPath,
+      }),
+    );
+    return { success: true, recoveryPath: targetPath };
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'candidate_preservation_failed',
+        render_id: renderId,
+        source_path: candidatePath,
+        recovery_path: targetPath,
+        exception_name: err.constructor.name,
+        exception_message: err.message,
+      }),
+    );
+    return { success: false, recoveryPath: targetPath, error: err };
+  }
 };
 
 export const markValidationFailed = async (

@@ -30,6 +30,7 @@ export const testConfig = (root: string): AppConfig => ({
   programAudioCacheRoot: path.join(root, 'cache', 'program-audio'),
   workRoot: path.join(root, 'work'),
   outputRoot: path.join(root, 'outputs'),
+  recoveryRoot: path.join(root, 'recovery'),
   orchestratorBaseUrl: 'http://orchestrator.test',
   mediaIndexerBaseUrl: 'http://media-indexer.test',
   httpTimeoutMs: 1_000,

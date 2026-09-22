@@ -1,4 +1,5 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import path from 'node:path';
 
 import { MediaIndexerClient } from './clients/media-indexer.js';
 import { OrchestratorClient } from './clients/orchestrator.js';
@@ -21,6 +22,7 @@ import { TemporalDerivativeResolver } from './services/temporal-derivative-resol
 import { CacheCatalog } from './storage/cache-catalog.js';
 
 export const startRuntime = async (config: AppConfig): Promise<void> => {
+  // Create all required directories
   await Promise.all(
     [
       config.sourceCacheRoot,
@@ -30,8 +32,47 @@ export const startRuntime = async (config: AppConfig): Promise<void> => {
       config.programAudioCacheRoot,
       config.workRoot,
       config.outputRoot,
+      config.recoveryRoot,
     ].map(async (directory) => await mkdir(directory, { recursive: true })),
   );
+
+  // Validate critical directories are writable
+  const criticalDirs = [
+    { name: 'database', path: path.dirname(config.databasePath) },
+    { name: 'work', path: config.workRoot },
+    { name: 'outputs', path: config.outputRoot },
+    { name: 'recovery', path: config.recoveryRoot },
+  ];
+
+  for (const dir of criticalDirs) {
+    const testFile = path.join(dir.path, `.write_test_${process.pid}`);
+    try {
+      await writeFile(testFile, 'WRITE_TEST');
+      await unlink(testFile);
+      console.info(
+        JSON.stringify({
+          level: 'info',
+          event: 'storage_directory_validated',
+          directory: dir.name,
+          path: dir.path,
+        }),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'storage_directory_not_writable',
+          directory: dir.name,
+          path: dir.path,
+          error_message: errorMessage,
+        }),
+      );
+      throw new Error(
+        `Critical storage directory '${dir.name}' at '${dir.path}' is not writable: ${errorMessage}`,
+      );
+    }
+  }
   await Promise.all([
     runProcess(config.ffmpegBinary, ['-version'], 'ffmpeg_unavailable'),
     runProcess(config.ffprobeBinary, ['-version'], 'ffprobe_unavailable'),

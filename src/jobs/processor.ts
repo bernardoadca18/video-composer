@@ -64,6 +64,11 @@ export class RenderJobProcessor {
     const temporaryVideo = path.join(workDirectory, 'video-only.tmp.mp4');
     const finalOutput = path.join(this.config.outputRoot, `${job.id}.mp4`);
     let activePreparation: ActivePreparationOperation | null = null;
+    // Track whether we should preserve work directory on failure
+    // This prevents losing expensive renders when recovery preservation fails
+    let preserveWorkDirectory = false;
+    let videoOnlyPreserved = false;
+    let candidatePreserved = false;
     await mkdir(workDirectory, { recursive: true });
     await mkdir(this.config.outputRoot, { recursive: true });
     await unlink(temporaryOutput).catch(() => undefined);
@@ -583,12 +588,28 @@ export class RenderJobProcessor {
         );
 
         // Preserve video-only artifact after successful Remotion render
-        await preserveVideoOnly(this.config, job.id, temporaryVideoPath, {
+        const videoOnlyResult = await preserveVideoOnly(this.config, job.id, temporaryVideoPath, {
           render_id: job.id,
           manifest_fingerprint: job.manifestFingerprint,
           render_fingerprint: job.renderFingerprint,
           created_at: new Date().toISOString(),
         });
+        if (videoOnlyResult.success) {
+          videoOnlyPreserved = true;
+        } else {
+          // Preservation failed - keep work directory to avoid losing expensive render
+          preserveWorkDirectory = true;
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              event: 'video_only_preservation_failed_after_render',
+              render_id: job.id,
+              recovery_path: videoOnlyResult.recoveryPath,
+              error_message: videoOnlyResult.error?.message,
+              work_directory_preserved: true,
+            }),
+          );
+        }
       } // end of else block for video-only reuse check
 
       if (job.manifest.schema_version === 'render_manifest_v4') {
@@ -614,12 +635,28 @@ export class RenderJobProcessor {
       }
 
       // Preserve candidate MP4 after successful mux
-      await preserveCandidate(this.config, job.id, temporaryOutput, {
+      const candidateResult = await preserveCandidate(this.config, job.id, temporaryOutput, {
         render_id: job.id,
         manifest_fingerprint: job.manifestFingerprint,
         render_fingerprint: job.renderFingerprint,
         created_at: new Date().toISOString(),
       });
+      if (candidateResult.success) {
+        candidatePreserved = true;
+      } else {
+        // Preservation failed - keep work directory to avoid losing expensive render
+        preserveWorkDirectory = true;
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'candidate_preservation_failed_after_mux',
+            render_id: job.id,
+            recovery_path: candidateResult.recoveryPath,
+            error_message: candidateResult.error?.message,
+            work_directory_preserved: true,
+          }),
+        );
+      }
 
       const renderSeconds = (performance.now() - renderStarted) / 1000;
       this.repository.updateProgress(job.id, 'validating', 0.92, job.totalFrames);
@@ -627,6 +664,10 @@ export class RenderJobProcessor {
       const output = await validateOutput(this.config, temporaryOutput, job.manifest);
       const validationSeconds = (performance.now() - validationStarted) / 1000;
       await rename(temporaryOutput, finalOutput);
+
+      // Final output exists and is durable - work directory can be cleaned up
+      // even if intermediate recovery preservation failed
+      preserveWorkDirectory = false;
 
       // Mark recovery as completed and clean up intermediate artifacts
       await markCompleted(this.config, job.id);
@@ -732,7 +773,7 @@ export class RenderJobProcessor {
       const renderCompleted = failureState?.framesRendered === job.totalFrames;
 
       if (renderCompleted) {
-        // Mark validation failure but preserve artifacts
+        // Mark validation failure but preserve artifacts (if preservation succeeded)
         const safe = publicError(error);
         const diagnostics =
           error instanceof ComposerError ? error.diagnostics : undefined;
@@ -745,15 +786,21 @@ export class RenderJobProcessor {
           },
           diagnostics as RecoveryMetadata['validation_diagnostics'] | undefined,
         );
+        // Only claim artifacts are preserved if preservation actually succeeded
+        const hasPreservedArtifact = videoOnlyPreserved || candidatePreserved;
         console.error(
           JSON.stringify({
             level: 'error',
-            event: 'validation_failed_artifact_preserved',
+            event: hasPreservedArtifact
+              ? 'validation_failed_artifact_preserved'
+              : 'validation_failed_no_artifact_preserved',
             render_id: job.id,
             workflow_id: job.workflowId,
             error_category: safe.category,
             error_message: safe.message,
-            recovery_path: `/data/recovery/${job.id}`,
+            video_only_preserved: videoOnlyPreserved,
+            candidate_preserved: candidatePreserved,
+            work_directory_preserved: preserveWorkDirectory,
           }),
         );
       } else {
@@ -799,7 +846,22 @@ export class RenderJobProcessor {
         }),
       );
     } finally {
-      await rm(workDirectory, { recursive: true, force: true });
+      // Only clean up work directory if preservation succeeded or render never completed
+      if (preserveWorkDirectory) {
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            event: 'work_directory_preserved',
+            render_id: job.id,
+            work_directory: workDirectory,
+            reason: 'recovery_preservation_failed',
+            video_only_preserved: videoOnlyPreserved,
+            candidate_preserved: candidatePreserved,
+          }),
+        );
+      } else {
+        await rm(workDirectory, { recursive: true, force: true });
+      }
     }
   }
 }

@@ -47,6 +47,7 @@ export interface AppConfig {
   programAudioCacheRoot: string;
   workRoot: string;
   outputRoot: string;
+  recoveryRoot: string;
   orchestratorBaseUrl: string;
   mediaIndexerBaseUrl: string;
   httpTimeoutMs: number;
@@ -88,6 +89,7 @@ export const loadConfig = (environment: NodeJS.ProcessEnv = process.env): AppCon
     programAudioCacheRoot: path.join(dataRoot, 'cache', 'program-audio'),
     workRoot: path.join(dataRoot, 'work'),
     outputRoot: path.join(dataRoot, 'outputs'),
+    recoveryRoot: path.join(dataRoot, 'recovery'),
     orchestratorBaseUrl: value.ORCHESTRATOR_BASE_URL.replace(/\/$/, ''),
     mediaIndexerBaseUrl: value.MEDIA_INDEXER_BASE_URL.replace(/\/$/, ''),
     httpTimeoutMs: value.HTTP_TIMEOUT_MS,

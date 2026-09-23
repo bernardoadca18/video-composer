@@ -11,6 +11,8 @@ import {
   type RenderManifest,
   type RenderManifestV1,
   type RenderManifestV2,
+  type RenderManifestV5,
+  RenderManifestV5Schema,
   type RenderManifestV3,
   type RenderManifestV4,
   AudioMixPlanSchema,
@@ -341,12 +343,19 @@ const buildRenderManifestV1 = (
 };
 
 const buildRenderManifestV2 = (
-  timeline: Extract<ProductionTimeline, { schema_version: 'production_timeline_schema_v2' }>,
+  timeline: Extract<
+    ProductionTimeline,
+    { schema_version: 'production_timeline_schema_v2' | 'production_timeline_schema_v3' }
+  >,
   metadata: ReadonlyMap<string, MediaAssetMetadata>,
   profile: RenderProfile,
   mode: 'preview' | 'final',
   config: AppConfig,
-): { manifest: RenderManifestV2; manifestFingerprint: string; renderFingerprint: string } => {
+): {
+  manifest: RenderManifestV2 | RenderManifestV5;
+  manifestFingerprint: string;
+  renderFingerprint: string;
+} => {
   if (!['completed', 'completed_with_gaps'].includes(timeline.status)) {
     throw new ManifestValidationError('invalid_timeline', 'Timeline is not completed');
   }
@@ -537,9 +546,15 @@ const buildRenderManifestV2 = (
     throw new ManifestValidationError('render_limit', 'Timeline exceeds source asset limit');
   }
   const plannedPlacements = applyProxyPlan(manifestPlacements, profile, config);
-  const manifest = RenderManifestV2Schema.parse({
-    schema_version: 'render_manifest_v2',
-    composer_strategy_version: 'video_composer_v2_hybrid_sources',
+  const assetBased = timeline.schema_version === 'production_timeline_schema_v3';
+  const manifest = (assetBased ? RenderManifestV5Schema : RenderManifestV2Schema).parse({
+    schema_version: assetBased ? 'render_manifest_v5' : 'render_manifest_v2',
+    composer_strategy_version: assetBased
+      ? 'video_composer_v5_asset_sources'
+      : 'video_composer_v2_hybrid_sources',
+    ...(assetBased
+      ? { source_timeline_schema_version: timeline.schema_version, presentation: null }
+      : {}),
     proxy_strategy_version: 'proxy_strategy_v2',
     workflow_id: timeline.workflow_id,
     production_timeline_id: timeline.id,
@@ -633,6 +648,15 @@ export function buildRenderManifest(
   presentation?: PresentationSpec | null,
   audioMixPlan?: AudioMixPlan | null,
 ): { manifest: RenderManifest; manifestFingerprint: string; renderFingerprint: string } {
+  if (
+    ![
+      'production_timeline_schema_v1',
+      'production_timeline_schema_v2',
+      'production_timeline_schema_v3',
+    ].includes(timeline.schema_version)
+  ) {
+    throw new ManifestValidationError('invalid_timeline', 'Unsupported timeline schema');
+  }
   if (audioMixPlan && profile.name !== 'youtube_1080p30_program_audio_v1') {
     throw new ManifestValidationError(
       'invalid_profile',
@@ -666,7 +690,7 @@ export function buildRenderManifest(
     }
   }
   const legacy =
-    timeline.schema_version === 'production_timeline_schema_v2'
+    timeline.schema_version !== 'production_timeline_schema_v1'
       ? buildRenderManifestV2(timeline, metadata, profile, mode, config)
       : buildRenderManifestV1(timeline, metadata, profile, mode, config);
   if (!presentation) {
@@ -793,10 +817,20 @@ export function buildRenderManifest(
     throw new ManifestValidationError('invalid_presentation', 'Presentation range is invalid');
   }
 
-  const manifest = RenderManifestV3Schema.parse({
+  const manifest = (
+    timeline.schema_version === 'production_timeline_schema_v3'
+      ? RenderManifestV5Schema
+      : RenderManifestV3Schema
+  ).parse({
     ...legacy.manifest,
-    schema_version: 'render_manifest_v3',
-    composer_strategy_version: 'video_composer_v3_presentation',
+    schema_version:
+      timeline.schema_version === 'production_timeline_schema_v3'
+        ? 'render_manifest_v5'
+        : 'render_manifest_v3',
+    composer_strategy_version:
+      timeline.schema_version === 'production_timeline_schema_v3'
+        ? 'video_composer_v5_asset_sources'
+        : 'video_composer_v3_presentation',
     source_timeline_schema_version: timeline.schema_version,
     presentation: presentationFrames,
   });

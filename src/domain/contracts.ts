@@ -53,6 +53,49 @@ export const StaticImagePresentationSchema = z
   })
   .strict();
 
+export const StaticImagePresentationV2Schema = z
+  .object({
+    policy_version: z.literal('static_image_presentation_v2'),
+    fit: z.enum(['cover', 'contain']),
+    background: z.enum(['black', 'blurred_fill']),
+    transform: z
+      .object({
+        start_scale: z.number().finite().min(1).max(2),
+        end_scale: z.number().finite().min(1).max(2),
+        start_x: z.number().finite().min(-1).max(1),
+        end_x: z.number().finite().min(-1).max(1),
+        start_y: z.number().finite().min(-1).max(1),
+        end_y: z.number().finite().min(-1).max(1),
+        easing: z.enum(['linear', 'ease_in_out']),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((p, ctx) => {
+    if (p.fit !== 'cover') return;
+    for (const endpoint of ['start', 'end'] as const) {
+      const t = p.transform;
+      const margin = (t[`${endpoint}_scale`] - 1) / 2;
+      if (
+        Math.abs(t[`${endpoint}_x`]) > margin + 1e-9 ||
+        Math.abs(t[`${endpoint}_y`]) > margin + 1e-9
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'storyboard_motion_invalid: transform exposes edges',
+        });
+      }
+    }
+  });
+export const StaticImagePresentationAnySchema = z.union([
+  StaticImagePresentationSchema,
+  StaticImagePresentationV2Schema,
+]);
+export type StaticImagePresentation = z.infer<typeof StaticImagePresentationAnySchema>;
+export const TimelineStaticImageSourceV3Schema = TimelineStaticImageSourceSchema.extend({
+  image_semantic_index_id: Id.nullish(),
+});
+
 export const TimelinePlacementV1Schema = z.object({
   id: Id,
   order: z.number().int().nonnegative(),
@@ -141,9 +184,26 @@ export const ProductionTimelineV2Schema = z.object({
   }),
 });
 
+export const TimelineImagePlacementV3Schema = TimelineImagePlacementV2Schema.extend({
+  source: TimelineStaticImageSourceV3Schema,
+  presentation: StaticImagePresentationAnySchema,
+});
+export const ProductionTimelineV3Schema = ProductionTimelineV2Schema.extend({
+  schema_version: z.literal('production_timeline_schema_v3'),
+  tracks: z.object({
+    narration: NarrationTrackSchema.nullable(),
+    primary_visual: z.object({
+      placements: z.array(
+        z.union([TimelineVideoPlacementV2Schema, TimelineImagePlacementV3Schema]),
+      ),
+    }),
+  }),
+});
+
 export const ProductionTimelineSchema = z.union([
   ProductionTimelineV1Schema,
   ProductionTimelineV2Schema,
+  ProductionTimelineV3Schema,
 ]);
 
 const CaptionTextSchema = z
@@ -858,11 +918,40 @@ export const RenderManifestV4Schema = z
     });
   });
 
+// Asset-based timelines use a new manifest; historical manifests stay strict.
+export const RenderManifestV5Schema = z
+  .object({
+    ...RenderManifestV2Schema.shape,
+    schema_version: z.literal('render_manifest_v5'),
+    composer_strategy_version: z.literal('video_composer_v5_asset_sources'),
+    source_timeline_schema_version: z.literal('production_timeline_schema_v3'),
+    presentation: RenderPresentationSchema.nullable(),
+    placements: z.array(
+      z.union([
+        z.object({
+          ...RenderPlacementBase,
+          source: RenderVideoSourceV2Schema,
+          playback_rate: z.literal(1),
+          presentation: z.null(),
+        }),
+        z.object({
+          ...RenderPlacementBase,
+          source: RenderImageSourceV2Schema.extend({ image_semantic_index_id: Id.nullish() }),
+          playback_rate: z.null(),
+          presentation: StaticImagePresentationAnySchema,
+        }),
+      ]),
+    ),
+  })
+  .strict();
+export type RenderManifestV5 = z.infer<typeof RenderManifestV5Schema>;
+
 export const RenderManifestSchema = z.union([
   RenderManifestV1Schema,
   RenderManifestV2Schema,
   RenderManifestV3Schema,
   RenderManifestV4Schema,
+  RenderManifestV5Schema,
 ]);
 export type RenderManifest = z.infer<typeof RenderManifestSchema>;
 export type RenderManifestV1 = z.infer<typeof RenderManifestV1Schema>;

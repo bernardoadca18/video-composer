@@ -1,4 +1,6 @@
 import React from 'react';
+import { imageTransformAt } from '../domain/image-motion.js';
+import type { StaticImagePresentation } from '../domain/contracts.js';
 import {
   AbsoluteFill,
   Audio,
@@ -31,24 +33,14 @@ const GameplayPlacement: React.FC<{
 const StaticImagePlacement: React.FC<{
   source: string;
   durationInFrames: number;
-  presentation: {
-    fit: 'cover' | 'contain';
-    background: 'black' | 'blurred_fill';
-    motion: 'none' | 'slow_zoom_in' | 'slow_zoom_out';
-    zoom_amount: number;
-  };
+  presentation: StaticImagePresentation;
 }> = ({ source, durationInFrames, presentation }) => {
   const frame = useCurrentFrame();
   const progress = interpolate(frame, [0, Math.max(1, durationInFrames - 1)], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
-  const scale =
-    presentation.motion === 'slow_zoom_in'
-      ? 1 + presentation.zoom_amount * progress
-      : presentation.motion === 'slow_zoom_out'
-        ? 1 + presentation.zoom_amount * (1 - progress)
-        : 1;
+  const transform = imageTransformAt(presentation, progress);
   return (
     <AbsoluteFill style={{ backgroundColor: '#000000', overflow: 'hidden' }}>
       {presentation.background === 'blurred_fill' ? (
@@ -70,7 +62,7 @@ const StaticImagePlacement: React.FC<{
           height: '100%',
           objectFit: presentation.fit,
           position: 'absolute',
-          transform: `scale(${scale})`,
+          transform,
           width: '100%',
         }}
       />
@@ -113,6 +105,7 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
                 'presentation' in placement && placement.presentation
                   ? placement.presentation
                   : {
+                      policy_version: 'static_image_presentation_v1',
                       fit: 'contain',
                       background: 'black',
                       motion: 'none',
@@ -143,7 +136,9 @@ export const NarratedGameplayComposition: React.FC<RenderManifest> = (rawProps) 
         : null}
       {manifest.schema_version === 'render_manifest_v3' ? (
         <PresentationLayers presentation={manifest.presentation} />
-      ) : manifest.schema_version === 'render_manifest_v4' && manifest.presentation ? (
+      ) : (manifest.schema_version === 'render_manifest_v4' ||
+          manifest.schema_version === 'render_manifest_v5') &&
+        manifest.presentation ? (
         <PresentationLayers presentation={manifest.presentation} />
       ) : null}
       {manifest.schema_version === 'render_manifest_v4' ? null : (

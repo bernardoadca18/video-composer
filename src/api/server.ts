@@ -51,7 +51,8 @@ const jobResponse = (job: RenderJob): Record<string, unknown> => ({
   manifest_fingerprint: job.manifestFingerprint,
   presentation_fingerprint:
     job.manifest.schema_version === 'render_manifest_v3' ||
-    job.manifest.schema_version === 'render_manifest_v4'
+    job.manifest.schema_version === 'render_manifest_v4' ||
+    job.manifest.schema_version === 'render_manifest_v5'
       ? (job.manifest.presentation?.fingerprint ?? null)
       : null,
   audio_mix_plan_fingerprint:

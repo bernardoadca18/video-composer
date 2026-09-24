@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildServer } from '../../src/api/server.js';
+import { RenderManifestV5Schema } from '../../src/domain/contracts.js';
 import { RenderJobRepository } from '../../src/jobs/repository.js';
 import type { RenderCoordinator } from '../../src/services/render-coordinator.js';
 import { renderManifest, testConfig, TIMELINE_ID, WORKFLOW_ID } from '../helpers.js';
@@ -63,6 +64,37 @@ describe('render API', () => {
     expect(created.statusCode).toBe(202);
     expect(created.json().status).toBe('queued');
     expect(created.json().presentation_fingerprint).toBeNull();
+    const legacy = job.manifest;
+    job.manifest = RenderManifestV5Schema.parse({
+      ...legacy,
+      schema_version: 'render_manifest_v5',
+      composer_strategy_version: 'video_composer_v5_asset_sources',
+      source_timeline_schema_version: 'production_timeline_schema_v3',
+      source_assets: legacy.source_assets.map((asset) => ({ ...asset, media_kind: 'video' })),
+      placements: legacy.placements.map((placement) => ({
+        ...placement,
+        source: { ...placement.source, source_type: 'video_segment' },
+        presentation: null,
+      })),
+      presentation: {
+        schema_version: 'presentation_spec_v1',
+        strategy_version: 'longform_presentation_v1',
+        profile_id: 'longform_professional_v1',
+        fingerprint: 'a'.repeat(64),
+        captions: null,
+        section_titles: [],
+        branding: { preset: 'branding_disabled_v1', enabled: false },
+        transitions: [],
+      },
+    });
+    const pov = await server.inject({
+      method: 'POST',
+      url: '/v1/renders',
+      headers: { 'idempotency-key': 'api-key' },
+      payload: { workflow_id: WORKFLOW_ID, mode: 'final' },
+    });
+    expect(pov.statusCode).toBe(202);
+    expect(pov.json().presentation_fingerprint).toBe('a'.repeat(64));
     expect(created.json().output_path).toBeUndefined();
     expect(suppliedKey).toBe('api-key');
     expect((await server.inject({ method: 'GET', url: `/v1/renders/${job.id}` })).statusCode).toBe(

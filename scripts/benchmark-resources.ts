@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { buildRenderResourcePlan } from '../src/benchmark/resource-plan.js';
 import { loadConfig } from '../src/core/config.js';
+import { sha256File } from '../src/core/identity.js';
 import { RenderManifestSchema } from '../src/domain/contracts.js';
-import { validateOutput } from '../src/media/output-validator.js';
+import { mediaDuration, probeMediaWithFrameCount, rational } from '../src/media/probe.js';
 import { RemotionVideoRenderer } from '../src/remotion/renderer.js';
 
 const execFileAsync = promisify(execFile);
@@ -79,6 +80,52 @@ const systemGpuMemoryUsedMiB = async (): Promise<number | null> => {
   }
 };
 
+// RemotionVideoRenderer writes the video-only intermediate. Production muxes
+// narration afterward; validating it as a final audio-bearing MP4 is incorrect.
+const validateVideoIntermediate = async (
+  config: ReturnType<typeof loadConfig>,
+  filePath: string,
+  manifest: ReturnType<typeof RenderManifestSchema.parse>,
+) => {
+  const details = await stat(filePath);
+  const probe = await probeMediaWithFrameCount(config.ffprobeBinary, filePath);
+  const videos = probe.streams.filter((stream) => stream.codec_type === 'video');
+  const audios = probe.streams.filter((stream) => stream.codec_type === 'audio');
+  const video = videos[0];
+  const fps = rational(video?.avg_frame_rate ?? video?.r_frame_rate);
+  const duration = mediaDuration(probe);
+  const frameCount = video?.nb_read_frames ? Number(video.nb_read_frames) : null;
+  const tolerance = 1 / manifest.render_profile.fps + 0.005;
+  if (
+    details.size <= 0 ||
+    videos.length !== 1 ||
+    audios.length !== 0 ||
+    video?.codec_name !== 'h264' ||
+    video.pix_fmt !== 'yuv420p' ||
+    video.width !== manifest.render_profile.width ||
+    video.height !== manifest.render_profile.height ||
+    fps === null ||
+    Math.abs(fps - manifest.render_profile.fps) > 0.001 ||
+    duration === null ||
+    Math.abs(duration - manifest.duration_seconds) > tolerance ||
+    frameCount !== manifest.duration_in_frames
+  ) {
+    throw new Error(`Invalid Remotion video intermediate: ${filePath}`);
+  }
+  return {
+    sha256: await sha256File(filePath),
+    byteSize: details.size,
+    durationSeconds: duration,
+    width: video.width,
+    height: video.height,
+    fps,
+    frameCount,
+    videoCodec: video.codec_name,
+    pixelFormat: video.pix_fmt,
+    audioStreams: audios.length,
+  };
+};
+
 const main = async (): Promise<void> => {
   const manifestArgument = valueAfter('--manifest');
   if (!manifestArgument) {
@@ -147,7 +194,11 @@ const main = async (): Promise<void> => {
       while (sampleRunning) await new Promise((resolve) => setTimeout(resolve, 10));
       await sample();
     }
-    const validated = await validateOutput(caseConfig, benchmarkCase.outputPath, manifest);
+    const validated = await validateVideoIntermediate(
+      caseConfig,
+      benchmarkCase.outputPath,
+      manifest,
+    );
     const wallSeconds = (performance.now() - started) / 1000;
     const result = {
       concurrency: benchmarkCase.concurrency,

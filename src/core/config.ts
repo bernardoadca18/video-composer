@@ -18,7 +18,7 @@ const EnvironmentSchema = z.object({
     .transform((value) => value === 'true'),
   MAX_QUEUE_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   RENDER_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
-  REMOTION_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
+  REMOTION_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
   REMOTION_MEDIA_CACHE_BYTES: z.coerce.number().int().positive().default(536_870_912),
   REMOTION_OFFTHREAD_VIDEO_CACHE_BYTES: z.coerce.number().int().positive().default(536_870_912),
   REMOTION_OFFTHREAD_VIDEO_THREADS: z.coerce.number().int().min(1).max(4).default(1),
